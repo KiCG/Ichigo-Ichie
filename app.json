@@ -13,18 +13,45 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kishiryusei.ichigoichie",
+      "infoPlist": {
+        "NSCameraUsageDescription": "写真を撮影して思い出を保存します。",
+        "NSLocationWhenInUseUsageDescription": "現在地を取得して近くの思い出を表示します。",
+        "NSPhotoLibraryAddUsageDescription": "撮影した写真をカメラロールに保存します。",
+        "NSPhotoLibraryUsageDescription": "カメラロールから写真を選択します。"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      }
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      "expo-secure-store",
+      "expo-camera",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "現在地を取得して近くの思い出を表示します。"
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "撮影した写真をカメラロールに保存します。",
+          "savePhotosPermission": "撮影した写真をカメラロールに保存します。",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#ffffff"
+        }
+      ]
+    ]
   }
 }
