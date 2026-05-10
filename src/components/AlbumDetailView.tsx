@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
   Text,
@@ -112,9 +113,17 @@ export default function AlbumDetailView({ albumId, emptyText }: Props) {
     })))
   }, [albumId])
 
-  useEffect(() => {
-    fetchPhotos().finally(() => setLoading(false))
-  }, [fetchPhotos])
+  const isFirstLoad = useRef(true)
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstLoad.current) {
+        fetchPhotos().finally(() => { setLoading(false); isFirstLoad.current = false })
+      } else {
+        fetchPhotos()
+      }
+    }, [fetchPhotos])
+  )
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
