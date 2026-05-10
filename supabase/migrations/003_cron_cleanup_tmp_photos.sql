@@ -18,7 +18,7 @@ select cron.schedule(
       url     := 'https://ngtfnebyrazjefiqxhbj.supabase.co/functions/v1/cleanup-tmp-photos',
       headers := jsonb_build_object(
         'Content-Type',  'application/json',
-        'Authorization', 'Bearer sb_publishable_GknPABzxtW4gvWTubY9_Cw_aLaaQoyi'
+        'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ndGZuZWJ5cmF6amVmaXF4aGJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNTQyNTMsImV4cCI6MjA5MzYzMDI1M30.NeuBXG7vptH4xWJDUTTwGtyfnTtpw3CZ2GEW0kX5vCg'
       ),
       body    := '{}'::jsonb
     ) as request_id;

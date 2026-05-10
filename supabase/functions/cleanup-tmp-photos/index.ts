@@ -3,14 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const STORAGE_MARKER = '/storage/v1/object/public/photos/'
 
-serve(async (req) => {
-  // anon キーで認証（pg_cron は Authorization: Bearer <anon_key> で呼び出す）
-  const authHeader = req.headers.get('Authorization') ?? ''
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
-  if (authHeader !== `Bearer ${anonKey}`) {
-    return new Response('Unauthorized', { status: 401 })
-  }
-
+serve(async (_req) => {
   // DB 操作はサービスロールキーで行い RLS をバイパスする
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
