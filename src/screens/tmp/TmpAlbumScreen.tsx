@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
+import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
   Text,
@@ -9,10 +10,13 @@ import {
   ActivityIndicator,
   Dimensions,
   RefreshControl,
-  Modal,
-  ScrollView,
+  Alert,
 } from 'react-native'
+import { useNavigation } from '@react-navigation/native'
+import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
+import { deletePhoto } from '../../lib/photoDelete'
+import type { TmpStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -21,16 +25,17 @@ const COLORS = {
   subtext: '#9E9E9E',
   border: '#E0D9D0',
   warning: '#E67E22',
+  danger: '#C0392B',
 }
 
 const ITEM_SIZE = (Dimensions.get('window').width - 48) / 2
+
+type Nav = NativeStackNavigationProp<TmpStackParamList, 'TmpAlbum'>
 
 type TmpPhoto = {
   id: string
   image_url: string
   taken_at: string
-  album_title: string | null
-  message: string | null
 }
 
 function daysRemaining(takenAt: string): number {
@@ -39,10 +44,10 @@ function daysRemaining(takenAt: string): number {
 }
 
 export default function TmpAlbumScreen() {
+  const navigation = useNavigation<Nav>()
   const [photos, setPhotos] = useState<TmpPhoto[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [selected, setSelected] = useState<TmpPhoto | null>(null)
 
   const fetchPhotos = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -50,55 +55,62 @@ export default function TmpAlbumScreen() {
 
     const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
 
-    const { data: photosData, error: photosError } = await supabase
+    const { data, error } = await supabase
       .from('photos')
-      .select('id, image_url, taken_at, album_id')
+      .select('id, image_url, taken_at')
       .eq('user_id', user.id)
+      .is('album_id', null)
       .gte('taken_at', since)
       .order('taken_at', { ascending: false })
 
-    if (photosError) {
-      console.error('photos fetch error:', photosError.message)
-      return
-    }
-    if (!photosData?.length) {
-      setPhotos([])
+    if (error) {
+      console.error('TmpAlbumScreen fetch error:', error.message)
       return
     }
 
-    const photoIds = photosData.map(p => p.id)
-    const albumIds = [...new Set(photosData.map(p => p.album_id).filter(Boolean))]
-
-    const [{ data: messagesData }, { data: albumsData }] = await Promise.all([
-      supabase.from('messages').select('photo_id, content').in('photo_id', photoIds).eq('is_original', true),
-      supabase.from('albums').select('id, title').in('id', albumIds),
-    ])
-
-    const messageMap: Record<string, string> = Object.fromEntries(
-      (messagesData ?? []).map(m => [m.photo_id, m.content])
-    )
-    const albumMap: Record<string, string> = Object.fromEntries(
-      (albumsData ?? []).map(a => [a.id, a.title])
-    )
-
-    setPhotos(photosData.map(p => ({
-      id: p.id,
-      image_url: p.image_url,
-      taken_at: p.taken_at,
-      album_title: albumMap[p.album_id] ?? null,
-      message: messageMap[p.id] ?? null,
-    })))
+    setPhotos(data ?? [])
   }, [])
 
-  useEffect(() => {
-    fetchPhotos().finally(() => setLoading(false))
-  }, [fetchPhotos])
+  const isFirstLoad = useRef(true)
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstLoad.current) {
+        fetchPhotos().finally(() => { setLoading(false); isFirstLoad.current = false })
+      } else {
+        fetchPhotos()
+      }
+    }, [fetchPhotos])
+  )
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
     await fetchPhotos()
     setRefreshing(false)
   }, [fetchPhotos])
+
+  const handleDelete = (photo: TmpPhoto) => {
+    Alert.alert(
+      'この写真を削除しますか？',
+      'この操作は取り消せません。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除する',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deletePhoto(photo.id, photo.image_url)
+              setPhotos(prev => prev.filter(p => p.id !== photo.id))
+            } catch (e) {
+              console.error('deletePhoto error:', e)
+              Alert.alert('エラー', '削除に失敗しました。もう一度お試しください。')
+            }
+          },
+        },
+      ]
+    )
+  }
 
   if (loading) {
     return (
@@ -112,8 +124,8 @@ export default function TmpAlbumScreen() {
     <View style={styles.container}>
       {photos.length === 0 ? (
         <View style={styles.center}>
-          <Text style={styles.emptyText}>直近3日間の思い出はありません</Text>
-          <Text style={styles.emptySubtext}>カメラで写真を撮ってメッセージを残しましょう</Text>
+          <Text style={styles.emptyText}>メッセージを待っている写真はありません</Text>
+          <Text style={styles.emptySubtext}>カメラで写真を撮るとここに表示されます</Text>
         </View>
       ) : (
         <FlatList
@@ -128,55 +140,24 @@ export default function TmpAlbumScreen() {
           renderItem={({ item }) => {
             const days = daysRemaining(item.taken_at)
             return (
-              <TouchableOpacity style={styles.card} onPress={() => setSelected(item)} activeOpacity={0.85}>
+              <TouchableOpacity
+                style={styles.card}
+                onPress={() => navigation.navigate('WriteMessage', { photoId: item.id, imageUrl: item.image_url })}
+                onLongPress={() => handleDelete(item)}
+                activeOpacity={0.85}
+              >
                 <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
                 <View style={[styles.badge, days <= 1 && styles.badgeUrgent]}>
                   <Text style={styles.badgeText}>残り{days}日</Text>
                 </View>
-                {item.message && (
-                  <View style={styles.cardBody}>
-                    <Text style={styles.messagePreview} numberOfLines={2}>{item.message}</Text>
-                  </View>
-                )}
+                <View style={styles.cardFooter}>
+                  <Text style={styles.cardHint}>タップしてメッセージを書く</Text>
+                </View>
               </TouchableOpacity>
             )
           }}
         />
       )}
-
-      <Modal
-        visible={selected !== null}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setSelected(null)}
-      >
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setSelected(null)}>
-          <View style={styles.modal}>
-            {selected && (
-              <>
-                <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
-                {selected.album_title && (
-                  <Text style={styles.modalAlbum}>{selected.album_title}</Text>
-                )}
-                {selected.message ? (
-                  <ScrollView style={styles.modalMessageScroll} bounces={false}>
-                    <Text style={styles.modalMessage}>{selected.message}</Text>
-                  </ScrollView>
-                ) : (
-                  <Text style={styles.modalNoMessage}>メッセージなし</Text>
-                )}
-                <View style={styles.modalFooter}>
-                  <Text style={styles.modalDays}>
-                    {daysRemaining(selected.taken_at) === 0
-                      ? '本日削除されます'
-                      : `残り${daysRemaining(selected.taken_at)}日で削除されます`}
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </View>
   )
 }
@@ -208,52 +189,8 @@ const styles = StyleSheet.create({
   },
   badgeUrgent: { backgroundColor: COLORS.warning },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
-  cardBody: { padding: 8 },
-  messagePreview: { fontSize: 12, color: COLORS.text, lineHeight: 18 },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
+  cardFooter: {
+    padding: 8,
   },
-  modal: {
-    width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  modalImage: { width: '100%', height: 280 },
-  modalAlbum: {
-    fontSize: 11,
-    color: COLORS.subtext,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  modalMessageScroll: { maxHeight: 120 },
-  modalMessage: {
-    fontSize: 15,
-    color: COLORS.text,
-    lineHeight: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  modalNoMessage: {
-    fontSize: 13,
-    color: COLORS.subtext,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  modalFooter: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  modalDays: {
-    fontSize: 12,
-    color: COLORS.subtext,
-    textAlign: 'center',
-    paddingVertical: 12,
-  },
+  cardHint: { fontSize: 11, color: COLORS.subtext },
 })

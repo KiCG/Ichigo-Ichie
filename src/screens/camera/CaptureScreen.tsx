@@ -10,7 +10,10 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as Location from 'expo-location'
 import * as MediaLibrary from 'expo-media-library'
+import * as FileSystem from 'expo-file-system/legacy'
+import { decode } from 'base64-arraybuffer'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
+import { supabase } from '../../lib/supabase'
 import { getCameraRollPreference } from '../../lib/cameraRollPreference'
 import type { CameraStackParamList } from '../../types'
 
@@ -54,13 +57,15 @@ export default function CaptureScreen({ navigation }: Props) {
         }
       }
 
-      const [photo, location] = await Promise.all([
-        cameraRef.current.takePictureAsync({ quality: 0.8 }),
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
-      ])
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('ログインが必要です')
 
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 })
       if (!photo) throw new Error('撮影に失敗しました')
 
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+
+      // カメラロール保存（all 設定時）
       const pref = await getCameraRollPreference()
       if (pref === 'all') {
         if (!mediaPermission?.granted) {
@@ -71,13 +76,30 @@ export default function CaptureScreen({ navigation }: Props) {
         }
       }
 
-      const localUri = photo.uri.startsWith('file://') ? photo.uri : `file://${photo.uri}`
-      navigation.navigate('WriteMessage', {
-        localUri,
+      // Storage にアップロード
+      const fileUri = photo.uri.startsWith('file://') ? photo.uri : `file://${photo.uri}`
+      const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: 'base64' })
+      const fileName = `${user.id}/${Date.now()}.jpg`
+      const { error: uploadError } = await supabase.storage
+        .from('photos')
+        .upload(fileName, decode(base64), { contentType: 'image/jpeg' })
+      if (uploadError) throw uploadError
+
+      const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(fileName)
+
+      // photos テーブルに保存（album_id なし = tmp 状態）
+      const { error: insertError } = await supabase.from('photos').insert({
+        user_id: user.id,
+        image_url: publicUrl,
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
+        taken_at: new Date().toISOString(),
       })
-    } catch {
+      if (insertError) throw insertError
+
+      // 撮影完了（画面はそのまま）
+    } catch (e: unknown) {
+      console.error('CaptureScreen error:', e)
       Alert.alert('エラー', '撮影中にエラーが発生しました')
     } finally {
       setCapturing(false)

@@ -13,12 +13,10 @@ import {
 } from 'react-native'
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
-import * as FileSystem from 'expo-file-system/legacy'
 import * as MediaLibrary from 'expo-media-library'
-import { decode } from 'base64-arraybuffer'
 import { supabase } from '../../lib/supabase'
 import { getCameraRollPreference } from '../../lib/cameraRollPreference'
-import type { Album, CameraStackParamList } from '../../types'
+import type { Album, TmpStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -30,13 +28,13 @@ const COLORS = {
   selected: '#F5EFE6',
 }
 
-type WriteMessageRoute = RouteProp<CameraStackParamList, 'WriteMessage'>
-type WriteMessageNav = NativeStackNavigationProp<CameraStackParamList, 'WriteMessage'>
+type WriteMessageRoute = RouteProp<TmpStackParamList, 'WriteMessage'>
+type WriteMessageNav = NativeStackNavigationProp<TmpStackParamList, 'WriteMessage'>
 
 export default function WriteMessageScreen() {
   const route = useRoute<WriteMessageRoute>()
   const navigation = useNavigation<WriteMessageNav>()
-  const { localUri, latitude, longitude, takenAt } = route.params
+  const { photoId, imageUrl } = route.params
 
   const [message, setMessage] = useState('')
   const [albums, setAlbums] = useState<Album[]>([])
@@ -63,12 +61,10 @@ export default function WriteMessageScreen() {
     setLoadingAlbums(false)
   }
 
-  const createAlbum = async (): Promise<string | null> => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return null
+  const createAlbum = async (userId: string): Promise<string | null> => {
     const { data, error } = await supabase
       .from('albums')
-      .insert({ title: newAlbumName.trim(), user_id: user.id })
+      .insert({ title: newAlbumName.trim(), user_id: userId })
       .select()
       .single()
     if (error || !data) return null
@@ -87,11 +83,6 @@ export default function WriteMessageScreen() {
         setError('アルバム名を入力してください')
         return
       }
-      albumId = await createAlbum()
-      if (!albumId) {
-        setError('アルバムの作成に失敗しました')
-        return
-      }
     } else if (!albumId) {
       setError('アルバムを選択してください')
       return
@@ -104,46 +95,32 @@ export default function WriteMessageScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('ログインが必要です')
 
-      const fileUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`
-      const base64 = await FileSystem.readAsStringAsync(fileUri, {
-        encoding: 'base64',
-      })
-      const fileName = `${user.id}/${Date.now()}.jpg`
-      const { error: uploadError } = await supabase.storage
-        .from('photos')
-        .upload(fileName, decode(base64), { contentType: 'image/jpeg' })
-      if (uploadError) throw uploadError
+      if (showNewAlbum) {
+        albumId = await createAlbum(user.id)
+        if (!albumId) throw new Error('アルバムの作成に失敗しました')
+      }
 
-      const { data: { publicUrl } } = supabase.storage
+      // 写真に album_id を設定（tmp → 正式保存）
+      const { error: updateError } = await supabase
         .from('photos')
-        .getPublicUrl(fileName)
+        .update({ album_id: albumId })
+        .eq('id', photoId)
+      if (updateError) throw updateError
 
-      const { data: photo, error: photoError } = await supabase
-        .from('photos')
-        .insert({
-          album_id: albumId,
-          user_id: user.id,
-          image_url: publicUrl,
-          latitude,
-          longitude,
-          taken_at: takenAt ?? new Date().toISOString(),
-        })
-        .select()
-        .single()
-      if (photoError || !photo) throw photoError ?? new Error('写真の保存に失敗しました')
-
+      // メッセージを保存
       const { error: msgError } = await supabase.from('messages').insert({
-        photo_id: photo.id,
+        photo_id: photoId,
         content: message.trim(),
         author_id: user.id,
         is_original: true,
       })
       if (msgError) throw msgError
 
+      // カメラロール保存（message_only 設定時）
       const pref = await getCameraRollPreference()
       if (pref === 'message_only') {
         const { status } = await MediaLibrary.requestPermissionsAsync()
-        if (status === 'granted') await MediaLibrary.saveToLibraryAsync(localUri)
+        if (status === 'granted') await MediaLibrary.saveToLibraryAsync(imageUrl)
       }
 
       navigation.goBack()
@@ -162,7 +139,7 @@ export default function WriteMessageScreen() {
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
-        <Image source={{ uri: localUri }} style={styles.photo} resizeMode="cover" />
+        <Image source={{ uri: imageUrl }} style={styles.photo} resizeMode="cover" />
 
         <View style={styles.section}>
           <Text style={styles.label}>メッセージ</Text>

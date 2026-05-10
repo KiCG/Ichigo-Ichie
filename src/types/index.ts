@@ -77,12 +77,11 @@ export type HomeStackParamList = {
 
 export type CameraStackParamList = {
   Capture: undefined
-  WriteMessage: { localUri: string; latitude: number; longitude: number; takenAt?: string }
 }
 
 export type TmpStackParamList = {
   TmpAlbum: undefined
-  WriteMessage: { localUri: string; latitude: number; longitude: number; takenAt?: string }
+  WriteMessage: { photoId: string; imageUrl: string }
 }
 
 export type AlbumStackParamList = {

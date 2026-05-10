@@ -36,7 +36,6 @@ function CameraNavigator() {
   return (
     <CameraStack.Navigator>
       <CameraStack.Screen name="Capture" component={CaptureScreen} options={{ headerShown: false }} />
-      <CameraStack.Screen name="WriteMessage" component={WriteMessageScreen} options={{ title: 'メッセージを書く' }} />
     </CameraStack.Navigator>
   )
 }

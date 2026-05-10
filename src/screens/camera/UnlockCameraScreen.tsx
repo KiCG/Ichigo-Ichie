@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as Location from 'expo-location'
@@ -24,6 +27,7 @@ const COLORS = {
   subtext: '#9E9E9E',
   border: '#E0D9D0',
   error: '#C0392B',
+  followUpBg: '#F0EDE8',
 }
 
 const UNLOCK_RADIUS_M = 50
@@ -37,6 +41,12 @@ type PhotoData = {
   latitude: number
   longitude: number
   message: string | null
+}
+
+type FollowUp = {
+  id: string
+  content: string
+  created_at: string
 }
 
 type Step = 'loading' | 'tooFar' | 'ready' | 'checking' | 'unlocked' | 'failed'
@@ -66,13 +76,28 @@ export default function UnlockCameraScreen() {
   const [errorMessage, setErrorMessage] = useState('')
   const [capturing, setCapturing] = useState(false)
 
+  const [userId, setUserId] = useState<string | null>(null)
+  const [followUps, setFollowUps] = useState<FollowUp[]>([])
+  const [newFollowUp, setNewFollowUp] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const fetchFollowUps = useCallback(async (pid: string) => {
+    const { data } = await supabase
+      .from('messages')
+      .select('id, content, created_at')
+      .eq('photo_id', pid)
+      .eq('is_original', false)
+      .order('created_at', { ascending: true })
+    setFollowUps(data ?? [])
+  }, [])
+
   const init = useCallback(async () => {
     setStep('loading')
 
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setStep('failed'); setErrorMessage('ログインが必要です'); return }
+    setUserId(user.id)
 
-    // Fetch target photo
     const { data: photoData } = await supabase
       .from('photos')
       .select('id, image_url, latitude, longitude')
@@ -81,7 +106,6 @@ export default function UnlockCameraScreen() {
 
     if (!photoData) { setStep('failed'); setErrorMessage('写真が見つかりません'); return }
 
-    // Fetch original message
     const { data: msgData } = await supabase
       .from('messages')
       .select('content')
@@ -89,16 +113,14 @@ export default function UnlockCameraScreen() {
       .eq('is_original', true)
       .single()
 
-    const fetchedPhoto: PhotoData = {
+    setPhoto({
       id: photoData.id,
       image_url: photoData.image_url,
       latitude: photoData.latitude,
       longitude: photoData.longitude,
       message: msgData?.content ?? null,
-    }
-    setPhoto(fetchedPhoto)
+    })
 
-    // Already unlocked?
     const { data: existing } = await supabase
       .from('unlock_records')
       .select('id')
@@ -106,9 +128,12 @@ export default function UnlockCameraScreen() {
       .eq('photo_id', photoId)
       .maybeSingle()
 
-    if (existing) { setStep('unlocked'); return }
+    if (existing) {
+      await fetchFollowUps(photoId)
+      setStep('unlocked')
+      return
+    }
 
-    // GPS check
     const { status } = await Location.requestForegroundPermissionsAsync()
     if (status !== 'granted') { setStep('failed'); setErrorMessage('位置情報の許可が必要です'); return }
 
@@ -119,7 +144,7 @@ export default function UnlockCameraScreen() {
     ))
     setDistance(dist)
     setStep(dist <= UNLOCK_RADIUS_M ? 'ready' : 'tooFar')
-  }, [photoId])
+  }, [photoId, fetchFollowUps])
 
   useEffect(() => { init() }, [init])
 
@@ -131,7 +156,6 @@ export default function UnlockCameraScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('ログインが必要です')
 
-      // カメラがアンマウントされる前に撮影を完了させる
       const taken = await cameraRef.current.takePictureAsync({ quality: 0.8 })
       if (!taken) throw new Error('撮影に失敗しました')
 
@@ -161,6 +185,7 @@ export default function UnlockCameraScreen() {
           photo_id: photo.id,
           unlock_image_url: unlockUrl,
         })
+        setFollowUps([])
         setStep('unlocked')
       } else {
         setStep('failed')
@@ -171,6 +196,30 @@ export default function UnlockCameraScreen() {
       setStep('failed')
     } finally {
       setCapturing(false)
+    }
+  }
+
+  const handleSaveFollowUp = async () => {
+    if (!newFollowUp.trim() || !photo || !userId) return
+    setSaving(true)
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          photo_id: photo.id,
+          content: newFollowUp.trim(),
+          author_id: userId,
+          is_original: false,
+        })
+        .select('id, content, created_at')
+        .single()
+      if (error) throw error
+      setFollowUps(prev => [...prev, data as FollowUp])
+      setNewFollowUp('')
+    } catch {
+      // noop — user can retry
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -211,16 +260,68 @@ export default function UnlockCameraScreen() {
   // --- Unlocked ---
   if (step === 'unlocked' && photo) {
     return (
-      <ScrollView contentContainerStyle={styles.unlockedContainer}>
-        <Image source={{ uri: photo.image_url }} style={styles.unlockedImage} resizeMode="cover" />
-        <View style={styles.unlockedBody}>
-          <Text style={styles.unlockedLabel}>思い出のメッセージ</Text>
-          <Text style={styles.unlockedMessage}>{photo.message ?? '（メッセージなし）'}</Text>
-          <TouchableOpacity style={styles.primaryButton} onPress={() => navigation.goBack()}>
-            <Text style={styles.primaryButtonText}>閉じる</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
+          contentContainerStyle={styles.unlockedContainer}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Image source={{ uri: photo.image_url }} style={styles.unlockedImage} resizeMode="cover" />
+          <View style={styles.unlockedBody}>
+
+            <View>
+              <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
+              <Text style={styles.unlockedMessage}>{photo.message ?? '（メッセージなし）'}</Text>
+            </View>
+
+            {followUps.length > 0 && (
+              <View style={styles.followUpSection}>
+                <Text style={styles.sectionLabel}>追記</Text>
+                {followUps.map(fu => (
+                  <View key={fu.id} style={styles.followUpItem}>
+                    <Text style={styles.followUpContent}>{fu.content}</Text>
+                    <Text style={styles.followUpDate}>
+                      {new Date(fu.created_at).toLocaleDateString('ja-JP', {
+                        year: 'numeric', month: 'long', day: 'numeric',
+                      })}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <View style={styles.appendSection}>
+              <Text style={styles.sectionLabel}>追記する</Text>
+              <TextInput
+                style={styles.appendInput}
+                value={newFollowUp}
+                onChangeText={setNewFollowUp}
+                placeholder="今の気持ちを書き留めておく…"
+                placeholderTextColor={COLORS.subtext}
+                multiline
+                textAlignVertical="top"
+              />
+              <TouchableOpacity
+                style={[styles.primaryButton, (!newFollowUp.trim() || saving) && styles.buttonDisabled]}
+                onPress={handleSaveFollowUp}
+                disabled={!newFollowUp.trim() || saving}
+              >
+                {saving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={styles.primaryButtonText}>追記を保存する</Text>
+                }
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
+              <Text style={styles.closeButtonText}>閉じる</Text>
+            </TouchableOpacity>
+
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     )
   }
 
@@ -291,6 +392,13 @@ const styles = StyleSheet.create({
   },
   subtext: { color: COLORS.subtext, fontSize: 13 },
   sectionTitle: { fontSize: 17, color: COLORS.text, fontWeight: '600', textAlign: 'center' },
+  sectionLabel: {
+    fontSize: 11,
+    color: COLORS.subtext,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
   distanceText: { fontSize: 13, color: COLORS.subtext, textAlign: 'center' },
   errorText: { fontSize: 14, color: COLORS.error, textAlign: 'center', lineHeight: 22 },
   linkText: { fontSize: 13, color: COLORS.subtext, textDecorationLine: 'underline' },
@@ -300,7 +408,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     paddingVertical: 13,
     borderRadius: 4,
+    alignItems: 'center',
   },
+  buttonDisabled: { opacity: 0.45 },
   primaryButtonText: { color: '#fff', fontSize: 14, letterSpacing: 1 },
   camera: { flex: 1 },
   referenceImage: {
@@ -349,13 +459,39 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   unlockedContainer: { backgroundColor: COLORS.background, flexGrow: 1 },
-  unlockedImage: { width: '100%', height: 320 },
-  unlockedBody: { padding: 24, gap: 12 },
-  unlockedLabel: {
-    fontSize: 11,
-    color: COLORS.subtext,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
+  unlockedImage: { width: '100%', height: 300 },
+  unlockedBody: { padding: 24, gap: 20 },
   unlockedMessage: { fontSize: 16, color: COLORS.text, lineHeight: 28 },
+  followUpSection: {
+    gap: 8,
+    paddingTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.border,
+  },
+  followUpItem: {
+    backgroundColor: COLORS.followUpBg,
+    borderRadius: 8,
+    padding: 12,
+    gap: 4,
+  },
+  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 22 },
+  followUpDate: { fontSize: 11, color: COLORS.subtext },
+  appendSection: {
+    gap: 10,
+    paddingTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.border,
+  },
+  appendInput: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    color: COLORS.text,
+    minHeight: 100,
+    backgroundColor: '#fff',
+  },
+  closeButton: { alignItems: 'center', paddingVertical: 4 },
+  closeButtonText: { fontSize: 13, color: COLORS.subtext, textDecorationLine: 'underline' },
 })

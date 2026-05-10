@@ -5,15 +5,21 @@ import {
   FlatList,
   Image,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   ActivityIndicator,
   Dimensions,
   RefreshControl,
   Modal,
   ScrollView,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
 } from 'react-native'
 import { useRoute, RouteProp } from '@react-navigation/native'
 import { supabase } from '../../lib/supabase'
+import { deletePhoto } from '../../lib/photoDelete'
 import type { AlbumStackParamList } from '../../types'
 
 const COLORS = {
@@ -22,17 +28,27 @@ const COLORS = {
   text: '#2C2C2C',
   subtext: '#9E9E9E',
   border: '#E0D9D0',
+  followUpBg: '#F0EDE8',
+  danger: '#C0392B',
 }
 
 const ITEM_SIZE = (Dimensions.get('window').width - 48) / 2
 
 type AlbumDetailRoute = RouteProp<AlbumStackParamList, 'AlbumDetail'>
 
+type MessageEntry = {
+  id: string
+  content: string
+  is_original: boolean
+  created_at: string
+}
+
 type PhotoItem = {
   id: string
   image_url: string
   taken_at: string
-  message: string | null
+  messages: MessageEntry[]
+  isUnlocked: boolean
 }
 
 export default function AlbumDetailScreen() {
@@ -43,8 +59,16 @@ export default function AlbumDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [selected, setSelected] = useState<PhotoItem | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [appendText, setAppendText] = useState('')
+  const [appendSaving, setAppendSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const fetchPhotos = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    setCurrentUserId(user.id)
+
     const { data: photoData } = await supabase
       .from('photos')
       .select('id, image_url, taken_at')
@@ -54,21 +78,39 @@ export default function AlbumDetailScreen() {
     if (!photoData?.length) { setPhotos([]); return }
 
     const photoIds = photoData.map(p => p.id)
-    const { data: msgData } = await supabase
-      .from('messages')
-      .select('photo_id, content')
-      .in('photo_id', photoIds)
-      .eq('is_original', true)
 
-    const msgMap: Record<string, string> = Object.fromEntries(
-      (msgData ?? []).map(m => [m.photo_id, m.content])
-    )
+    const [{ data: unlockData }, { data: msgData }] = await Promise.all([
+      supabase
+        .from('unlock_records')
+        .select('photo_id')
+        .eq('user_id', user.id)
+        .in('photo_id', photoIds),
+      supabase
+        .from('messages')
+        .select('id, photo_id, content, is_original, created_at')
+        .in('photo_id', photoIds)
+        .order('created_at', { ascending: true }),
+    ])
+
+    const unlockedSet = new Set((unlockData ?? []).map(u => u.photo_id as string))
+
+    const msgMap: Record<string, MessageEntry[]> = {}
+    for (const m of (msgData ?? [])) {
+      if (!msgMap[m.photo_id]) msgMap[m.photo_id] = []
+      msgMap[m.photo_id].push({
+        id: m.id,
+        content: m.content,
+        is_original: m.is_original,
+        created_at: m.created_at,
+      })
+    }
 
     setPhotos(photoData.map(p => ({
       id: p.id,
       image_url: p.image_url,
       taken_at: p.taken_at,
-      message: msgMap[p.id] ?? null,
+      messages: msgMap[p.id] ?? [],
+      isUnlocked: unlockedSet.has(p.id),
     })))
   }, [albumId])
 
@@ -82,6 +124,65 @@ export default function AlbumDetailScreen() {
     setRefreshing(false)
   }, [fetchPhotos])
 
+  const handleCloseModal = () => {
+    setSelected(null)
+    setAppendText('')
+  }
+
+  const handleDelete = () => {
+    if (!selected) return
+    Alert.alert(
+      'この写真を削除しますか？',
+      'メッセージも含めて完全に削除されます。この操作は取り消せません。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除する',
+          style: 'destructive',
+          onPress: async () => {
+            setDeleting(true)
+            try {
+              await deletePhoto(selected.id, selected.image_url)
+              setPhotos(prev => prev.filter(p => p.id !== selected.id))
+              handleCloseModal()
+            } catch (e) {
+              console.error('deletePhoto error:', e)
+              Alert.alert('エラー', '削除に失敗しました。もう一度お試しください。')
+            } finally {
+              setDeleting(false)
+            }
+          },
+        },
+      ]
+    )
+  }
+
+  const handleAppend = async () => {
+    if (!appendText.trim() || !selected || !currentUserId) return
+    setAppendSaving(true)
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          photo_id: selected.id,
+          content: appendText.trim(),
+          author_id: currentUserId,
+          is_original: false,
+        })
+        .select('id, content, is_original, created_at')
+        .single()
+      if (error) throw error
+
+      const newMsg = data as MessageEntry
+      const updatedSelected = { ...selected, messages: [...selected.messages, newMsg] }
+      setSelected(updatedSelected)
+      setPhotos(prev => prev.map(p => p.id === selected.id ? updatedSelected : p))
+      setAppendText('')
+    } finally {
+      setAppendSaving(false)
+    }
+  }
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -89,6 +190,9 @@ export default function AlbumDetailScreen() {
       </View>
     )
   }
+
+  const originalMsg = selected?.messages.find(m => m.is_original)
+  const followUpMsgs = selected?.messages.filter(m => !m.is_original) ?? []
 
   return (
     <View style={styles.container}>
@@ -106,16 +210,25 @@ export default function AlbumDetailScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.card} onPress={() => setSelected(item)} activeOpacity={0.85}>
-              <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
-              {item.message && (
-                <View style={styles.cardBody}>
-                  <Text style={styles.messagePreview} numberOfLines={2}>{item.message}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            const original = item.messages.find(m => m.is_original)
+            return (
+              <TouchableOpacity style={styles.card} onPress={() => setSelected(item)} activeOpacity={0.85}>
+                <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
+                {item.isUnlocked ? (
+                  original ? (
+                    <View style={styles.cardBody}>
+                      <Text style={styles.messagePreview} numberOfLines={2}>{original.content}</Text>
+                    </View>
+                  ) : null
+                ) : (
+                  <View style={styles.cardLock}>
+                    <Text style={styles.lockIcon}>🔒</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )
+          }}
         />
       )}
 
@@ -123,31 +236,99 @@ export default function AlbumDetailScreen() {
         visible={selected !== null}
         animationType="fade"
         transparent
-        onRequestClose={() => setSelected(null)}
+        onRequestClose={handleCloseModal}
       >
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setSelected(null)}>
-          <View style={styles.modal}>
-            {selected && (
-              <>
-                <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
-                {selected.message ? (
-                  <ScrollView style={styles.modalMessageScroll} bounces={false}>
-                    <Text style={styles.modalMessage}>{selected.message}</Text>
-                  </ScrollView>
-                ) : (
-                  <Text style={styles.modalNoMessage}>メッセージなし</Text>
-                )}
-                <View style={styles.modalFooter}>
-                  <Text style={styles.modalDate}>
-                    {new Date(selected.taken_at).toLocaleDateString('ja-JP', {
-                      year: 'numeric', month: 'long', day: 'numeric',
-                    })}
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-        </TouchableOpacity>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          {/* Outer Pressable closes modal on overlay tap */}
+          <Pressable style={styles.overlay} onPress={handleCloseModal}>
+            {/* Inner Pressable stops propagation so taps inside don't close modal */}
+            <Pressable style={styles.modal}>
+              {selected && (
+                <>
+                  <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
+
+                  {selected.isUnlocked ? (
+                    <ScrollView
+                      style={styles.modalScrollContent}
+                      bounces={false}
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      {originalMsg && (
+                        <View style={styles.modalSection}>
+                          <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
+                          <Text style={styles.modalMessage}>{originalMsg.content}</Text>
+                        </View>
+                      )}
+
+                      {followUpMsgs.length > 0 && (
+                        <View style={styles.modalSection}>
+                          <Text style={styles.sectionLabel}>追記</Text>
+                          {followUpMsgs.map(fu => (
+                            <View key={fu.id} style={styles.followUpItem}>
+                              <Text style={styles.followUpContent}>{fu.content}</Text>
+                              <Text style={styles.followUpDate}>
+                                {new Date(fu.created_at).toLocaleDateString('ja-JP', {
+                                  year: 'numeric', month: 'long', day: 'numeric',
+                                })}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+
+                      <View style={styles.appendSection}>
+                        <Text style={styles.sectionLabel}>追記する</Text>
+                        <TextInput
+                          style={styles.appendInput}
+                          value={appendText}
+                          onChangeText={setAppendText}
+                          placeholder="今の気持ちを書き留めておく…"
+                          placeholderTextColor={COLORS.subtext}
+                          multiline
+                          textAlignVertical="top"
+                        />
+                        <TouchableOpacity
+                          style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
+                          onPress={handleAppend}
+                          disabled={!appendText.trim() || appendSaving}
+                        >
+                          {appendSaving
+                            ? <ActivityIndicator color="#fff" size="small" />
+                            : <Text style={styles.appendButtonText}>追記を保存する</Text>
+                          }
+                        </TouchableOpacity>
+                      </View>
+                    </ScrollView>
+                  ) : (
+                    <View style={styles.lockedContent}>
+                      <Text style={styles.lockIconLarge}>🔒</Text>
+                      <Text style={styles.lockedHint}>
+                        この場所へ戻り同じ風景を撮影すると{'\n'}メッセージが解除されます
+                      </Text>
+                    </View>
+                  )}
+
+                  <View style={styles.modalFooter}>
+                    <Text style={styles.modalDate}>
+                      {new Date(selected.taken_at).toLocaleDateString('ja-JP', {
+                        year: 'numeric', month: 'long', day: 'numeric',
+                      })}
+                    </Text>
+                    <TouchableOpacity onPress={handleDelete} disabled={deleting}>
+                      {deleting
+                        ? <ActivityIndicator size="small" color={COLORS.danger} />
+                        : <Text style={styles.deleteText}>削除</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   )
@@ -170,6 +351,8 @@ const styles = StyleSheet.create({
   thumbnail: { width: '100%', height: ITEM_SIZE },
   cardBody: { padding: 8 },
   messagePreview: { fontSize: 12, color: COLORS.text, lineHeight: 18 },
+  cardLock: { paddingVertical: 6, paddingHorizontal: 8 },
+  lockIcon: { fontSize: 14 },
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
@@ -182,25 +365,74 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 12,
     overflow: 'hidden',
+    maxHeight: '88%',
   },
-  modalImage: { width: '100%', height: 280 },
-  modalMessageScroll: { maxHeight: 140 },
-  modalMessage: {
-    fontSize: 15,
-    color: COLORS.text,
-    lineHeight: 24,
-    padding: 16,
-  },
-  modalNoMessage: {
-    fontSize: 13,
+  modalImage: { width: '100%', height: 220 },
+  modalScrollContent: { maxHeight: 320 },
+  modalSection: { padding: 16, gap: 6 },
+  sectionLabel: {
+    fontSize: 11,
     color: COLORS.subtext,
-    padding: 16,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
-  modalFooter: {
-    borderTopWidth: 1,
+  modalMessage: { fontSize: 15, color: COLORS.text, lineHeight: 24 },
+  followUpItem: {
+    backgroundColor: COLORS.followUpBg,
+    borderRadius: 8,
+    padding: 10,
+    gap: 4,
+    marginTop: 8,
+  },
+  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 20 },
+  followUpDate: { fontSize: 11, color: COLORS.subtext },
+  appendSection: {
+    padding: 16,
+    gap: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: COLORS.border,
-    paddingVertical: 12,
+  },
+  appendInput: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 14,
+    color: COLORS.text,
+    minHeight: 80,
+    backgroundColor: '#fff',
+  },
+  appendButton: {
+    backgroundColor: COLORS.accent,
+    paddingVertical: 11,
+    borderRadius: 4,
     alignItems: 'center',
   },
+  buttonDisabled: { opacity: 0.45 },
+  appendButtonText: { color: '#fff', fontSize: 13, letterSpacing: 1 },
+  lockedContent: {
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    gap: 10,
+  },
+  lockIconLarge: { fontSize: 30 },
+  lockedHint: {
+    fontSize: 13,
+    color: COLORS.subtext,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  modalFooter: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.border,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   modalDate: { fontSize: 12, color: COLORS.subtext },
+  deleteText: { fontSize: 13, color: COLORS.danger },
 })
