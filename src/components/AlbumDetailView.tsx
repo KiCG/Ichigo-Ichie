@@ -51,9 +51,10 @@ type PhotoItem = {
 type Props = {
   albumId: string
   emptyText?: string
+  showMoveAction?: boolean
 }
 
-export default function AlbumDetailView({ albumId, emptyText }: Props) {
+export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: Props) {
   const [photos, setPhotos] = useState<PhotoItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -62,6 +63,13 @@ export default function AlbumDetailView({ albumId, emptyText }: Props) {
   const [appendText, setAppendText] = useState('')
   const [appendSaving, setAppendSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  const [showAlbumPicker, setShowAlbumPicker] = useState(false)
+  const [availableAlbums, setAvailableAlbums] = useState<{ id: string; title: string }[]>([])
+  const [loadingAlbums, setLoadingAlbums] = useState(false)
+  const [newAlbumName, setNewAlbumName] = useState('')
+  const [showNewAlbum, setShowNewAlbum] = useState(false)
+  const [moving, setMoving] = useState(false)
 
   const fetchPhotos = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -134,6 +142,59 @@ export default function AlbumDetailView({ albumId, emptyText }: Props) {
   const handleCloseModal = () => {
     setSelected(null)
     setAppendText('')
+  }
+
+  const openAlbumPicker = async () => {
+    setShowNewAlbum(false)
+    setNewAlbumName('')
+    setLoadingAlbums(true)
+    setShowAlbumPicker(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setLoadingAlbums(false); return }
+    const { data } = await supabase
+      .from('albums')
+      .select('id, title')
+      .eq('user_id', user.id)
+      .eq('is_desk', false)
+      .order('created_at', { ascending: false })
+    setAvailableAlbums(data ?? [])
+    setLoadingAlbums(false)
+  }
+
+  const handleMoveToAlbum = async (targetAlbumId: string | null) => {
+    if (!selected) return
+    setMoving(true)
+    try {
+      let finalAlbumId = targetAlbumId
+
+      if (targetAlbumId === null) {
+        if (!newAlbumName.trim()) return
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+        const { data } = await supabase
+          .from('albums')
+          .insert({ title: newAlbumName.trim(), user_id: user.id })
+          .select('id')
+          .single()
+        if (!data) throw new Error('アルバムの作成に失敗しました')
+        finalAlbumId = data.id
+      }
+
+      const { error } = await supabase
+        .from('photos')
+        .update({ album_id: finalAlbumId })
+        .eq('id', selected.id)
+      if (error) throw error
+
+      setPhotos(prev => prev.filter(p => p.id !== selected.id))
+      setShowAlbumPicker(false)
+      handleCloseModal()
+    } catch (e) {
+      console.error('movePhoto error:', e)
+      Alert.alert('エラー', '移動に失敗しました。もう一度お試しください。')
+    } finally {
+      setMoving(false)
+    }
   }
 
   const handleDelete = () => {
@@ -324,18 +385,85 @@ export default function AlbumDetailView({ albumId, emptyText }: Props) {
                         year: 'numeric', month: 'long', day: 'numeric',
                       })}
                     </Text>
-                    <TouchableOpacity onPress={handleDelete} disabled={deleting}>
-                      {deleting
-                        ? <ActivityIndicator size="small" color={COLORS.danger} />
-                        : <Text style={styles.deleteText}>削除</Text>
-                      }
-                    </TouchableOpacity>
+                    <View style={styles.footerActions}>
+                      {showMoveAction && (
+                        <TouchableOpacity onPress={openAlbumPicker} style={styles.moveButton}>
+                          <Text style={styles.moveText}>アルバムに移動</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity onPress={handleDelete} disabled={deleting}>
+                        {deleting
+                          ? <ActivityIndicator size="small" color={COLORS.danger} />
+                          : <Text style={styles.deleteText}>削除</Text>
+                        }
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </>
               )}
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>
+      </Modal>
+      <Modal
+        visible={showAlbumPicker}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowAlbumPicker(false)}
+      >
+        <Pressable style={styles.pickerOverlay} onPress={() => setShowAlbumPicker(false)}>
+          <Pressable style={styles.pickerSheet}>
+            <Text style={styles.pickerTitle}>移動先のアルバム</Text>
+
+            {loadingAlbums ? (
+              <ActivityIndicator color={COLORS.accent} style={{ marginVertical: 24 }} />
+            ) : (
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {availableAlbums.map(album => (
+                  <TouchableOpacity
+                    key={album.id}
+                    style={styles.pickerRow}
+                    onPress={() => handleMoveToAlbum(album.id)}
+                    disabled={moving}
+                  >
+                    <Text style={styles.pickerRowText}>{album.title}</Text>
+                  </TouchableOpacity>
+                ))}
+
+                <TouchableOpacity
+                  style={[styles.pickerRow, showNewAlbum && styles.pickerRowSelected]}
+                  onPress={() => setShowNewAlbum(v => !v)}
+                  disabled={moving}
+                >
+                  <Text style={styles.pickerRowText}>＋ 新しいアルバムを作成</Text>
+                </TouchableOpacity>
+
+                {showNewAlbum && (
+                  <View style={styles.newAlbumRow}>
+                    <TextInput
+                      style={styles.newAlbumInput}
+                      placeholder="アルバム名"
+                      placeholderTextColor={COLORS.subtext}
+                      value={newAlbumName}
+                      onChangeText={setNewAlbumName}
+                      autoFocus
+                    />
+                    <TouchableOpacity
+                      style={[styles.newAlbumConfirm, (!newAlbumName.trim() || moving) && styles.buttonDisabled]}
+                      onPress={() => handleMoveToAlbum(null)}
+                      disabled={!newAlbumName.trim() || moving}
+                    >
+                      {moving
+                        ? <ActivityIndicator color="#fff" size="small" />
+                        : <Text style={styles.newAlbumConfirmText}>作成して移動</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   )
@@ -441,5 +569,54 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   modalDate: { fontSize: 12, color: COLORS.subtext },
+  footerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  moveButton: {},
+  moveText: { fontSize: 13, color: COLORS.accent },
   deleteText: { fontSize: 13, color: COLORS.danger },
+  pickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  pickerSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 32,
+    maxHeight: '60%',
+  },
+  pickerTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+    textAlign: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.border,
+  },
+  pickerRow: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.border,
+  },
+  pickerRowSelected: { backgroundColor: '#F5EFE6' },
+  pickerRowText: { fontSize: 15, color: COLORS.text },
+  newAlbumRow: { paddingHorizontal: 20, paddingVertical: 12, gap: 8 },
+  newAlbumInput: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: COLORS.text,
+  },
+  newAlbumConfirm: {
+    backgroundColor: COLORS.accent,
+    borderRadius: 8,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  newAlbumConfirmText: { color: '#fff', fontSize: 14 },
 })

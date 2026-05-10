@@ -44,6 +44,7 @@ export default function DeskScreen() {
     <AlbumDetailView
       albumId={deskAlbumId}
       emptyText="机の上には何も置かれていません"
+      showMoveAction
     />
   )
 }
