@@ -45,6 +45,7 @@ export default function BookshelfScreen({ navigation }: Props) {
       .from('albums')
       .select('id, title')
       .eq('user_id', user.id)
+      .eq('is_desk', false)
       .order('created_at', { ascending: false })
 
     if (!albumData?.length) { setAlbums([]); return }

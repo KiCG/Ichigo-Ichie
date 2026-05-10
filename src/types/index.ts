@@ -23,6 +23,7 @@ export interface Album {
   user_id: string
   title: string
   cover_photo_id: string | null
+  is_desk: boolean
   created_at: string
 }
 

@@ -26,6 +26,8 @@ const COLORS = {
   border: '#E0D9D0',
   error: '#C0392B',
   selected: '#F5EFE6',
+  desk: '#E8F4E8',
+  deskBorder: '#7AAB7A',
 }
 
 type WriteMessageRoute = RouteProp<TmpStackParamList, 'WriteMessage'>
@@ -38,6 +40,8 @@ export default function WriteMessageScreen() {
 
   const [message, setMessage] = useState('')
   const [albums, setAlbums] = useState<Album[]>([])
+  const [deskAlbumId, setDeskAlbumId] = useState<string | null>(null)
+  const [useDeskAlbum, setUseDeskAlbum] = useState(true)
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null)
   const [showNewAlbum, setShowNewAlbum] = useState(false)
   const [newAlbumName, setNewAlbumName] = useState('')
@@ -52,12 +56,34 @@ export default function WriteMessageScreen() {
   const fetchAlbums = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const { data } = await supabase
+
+    // 机アルバムを取得（なければ作成）
+    let { data: desk } = await supabase
+      .from('albums')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('is_desk', true)
+      .single()
+
+    if (!desk) {
+      const { data: created } = await supabase
+        .from('albums')
+        .insert({ title: '机', user_id: user.id, is_desk: true })
+        .select('id')
+        .single()
+      desk = created
+    }
+    setDeskAlbumId(desk?.id ?? null)
+
+    // 通常アルバムのみ取得
+    const { data: normalAlbums } = await supabase
       .from('albums')
       .select('*')
       .eq('user_id', user.id)
+      .eq('is_desk', false)
       .order('created_at', { ascending: false })
-    setAlbums(data ?? [])
+
+    setAlbums(normalAlbums ?? [])
     setLoadingAlbums(false)
   }
 
@@ -76,15 +102,8 @@ export default function WriteMessageScreen() {
       setError('メッセージを入力してください')
       return
     }
-
-    let albumId = selectedAlbumId
-    if (showNewAlbum) {
-      if (!newAlbumName.trim()) {
-        setError('アルバム名を入力してください')
-        return
-      }
-    } else if (!albumId) {
-      setError('アルバムを選択してください')
+    if (showNewAlbum && !newAlbumName.trim()) {
+      setError('アルバム名を入力してください')
       return
     }
 
@@ -95,19 +114,24 @@ export default function WriteMessageScreen() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('ログインが必要です')
 
-      if (showNewAlbum) {
+      let albumId: string | null = null
+      if (useDeskAlbum) {
+        albumId = deskAlbumId
+        if (!albumId) throw new Error('机アルバムが見つかりません')
+      } else if (showNewAlbum) {
         albumId = await createAlbum(user.id)
         if (!albumId) throw new Error('アルバムの作成に失敗しました')
+      } else {
+        albumId = selectedAlbumId
+        if (!albumId) throw new Error('アルバムを選択してください')
       }
 
-      // 写真に album_id を設定（tmp → 正式保存）
       const { error: updateError } = await supabase
         .from('photos')
         .update({ album_id: albumId })
         .eq('id', photoId)
       if (updateError) throw updateError
 
-      // メッセージを保存
       const { error: msgError } = await supabase.from('messages').insert({
         photo_id: photoId,
         content: message.trim(),
@@ -116,7 +140,6 @@ export default function WriteMessageScreen() {
       })
       if (msgError) throw msgError
 
-      // カメラロール保存（message_only 設定時）
       const pref = await getCameraRollPreference()
       if (pref === 'message_only') {
         const { status } = await MediaLibrary.requestPermissionsAsync()
@@ -130,6 +153,24 @@ export default function WriteMessageScreen() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const selectDesk = () => {
+    setUseDeskAlbum(true)
+    setSelectedAlbumId(null)
+    setShowNewAlbum(false)
+  }
+
+  const selectAlbum = (id: string) => {
+    setUseDeskAlbum(false)
+    setSelectedAlbumId(id)
+    setShowNewAlbum(false)
+  }
+
+  const selectNewAlbum = () => {
+    setUseDeskAlbum(false)
+    setSelectedAlbumId(null)
+    setShowNewAlbum(true)
   }
 
   return (
@@ -155,27 +196,35 @@ export default function WriteMessageScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.label}>アルバムを選択</Text>
+          <Text style={styles.label}>保存先</Text>
           {loadingAlbums ? (
             <ActivityIndicator color={COLORS.accent} style={{ marginTop: 8 }} />
           ) : (
             <>
+              <TouchableOpacity
+                style={[styles.albumRow, styles.deskRow, useDeskAlbum && styles.deskRowSelected]}
+                onPress={selectDesk}
+              >
+                <Text style={[styles.albumRowText, styles.deskRowText]}>机の上に置く</Text>
+                <Text style={styles.deskRowSub}>後でアルバムに整理できます</Text>
+              </TouchableOpacity>
+
               {albums.map(album => (
                 <TouchableOpacity
                   key={album.id}
                   style={[
                     styles.albumRow,
-                    selectedAlbumId === album.id && !showNewAlbum && styles.albumRowSelected,
+                    !useDeskAlbum && selectedAlbumId === album.id && !showNewAlbum && styles.albumRowSelected,
                   ]}
-                  onPress={() => { setSelectedAlbumId(album.id); setShowNewAlbum(false) }}
+                  onPress={() => selectAlbum(album.id)}
                 >
                   <Text style={styles.albumRowText}>{album.title}</Text>
                 </TouchableOpacity>
               ))}
 
               <TouchableOpacity
-                style={[styles.albumRow, showNewAlbum && styles.albumRowSelected]}
-                onPress={() => { setShowNewAlbum(true); setSelectedAlbumId(null) }}
+                style={[styles.albumRow, !useDeskAlbum && showNewAlbum && styles.albumRowSelected]}
+                onPress={selectNewAlbum}
               >
                 <Text style={styles.albumRowText}>＋ 新しいアルバムを作成</Text>
               </TouchableOpacity>
@@ -247,6 +296,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.selected,
   },
   albumRowText: { fontSize: 14, color: COLORS.text },
+  deskRow: {
+    borderColor: COLORS.deskBorder,
+    backgroundColor: COLORS.desk,
+  },
+  deskRowSelected: {
+    borderWidth: 2,
+  },
+  deskRowText: { fontWeight: '600' },
+  deskRowSub: { fontSize: 12, color: COLORS.subtext, marginTop: 2 },
   albumNameInput: {
     height: 44,
     borderWidth: 1,
