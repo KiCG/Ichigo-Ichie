@@ -85,6 +85,10 @@ export type TmpStackParamList = {
   WriteMessage: { photoId: string; imageUrl: string }
 }
 
+export type DeskStackParamList = {
+  Desk: undefined
+}
+
 export type AlbumStackParamList = {
   Bookshelf: undefined
   AlbumDetail: { albumId: string; albumTitle: string }
@@ -94,6 +98,7 @@ export type MainTabParamList = {
   HomeTab: undefined
   CameraTab: undefined
   TmpTab: undefined
+  DeskTab: undefined
   AlbumTab: undefined
   SettingsTab: undefined
 }

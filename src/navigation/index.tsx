@@ -12,6 +12,7 @@ import CaptureScreen from '../screens/camera/CaptureScreen'
 import UnlockCameraScreen from '../screens/camera/UnlockCameraScreen'
 import TmpAlbumScreen from '../screens/tmp/TmpAlbumScreen'
 import WriteMessageScreen from '../screens/tmp/WriteMessageScreen'
+import DeskScreen from '../screens/desk/DeskScreen'
 import BookshelfScreen from '../screens/album/BookshelfScreen'
 import AlbumDetailScreen from '../screens/album/AlbumDetailScreen'
 import SettingsScreen from '../screens/settings/SettingsScreen'
@@ -22,6 +23,7 @@ import type {
   CameraStackParamList,
   HomeStackParamList,
   TmpStackParamList,
+  DeskStackParamList,
   AlbumStackParamList,
   MainTabParamList,
 } from '../types'
@@ -30,6 +32,7 @@ const AuthStack = createNativeStackNavigator<AuthStackParamList>()
 const CameraStack = createNativeStackNavigator<CameraStackParamList>()
 const HomeStack = createNativeStackNavigator<HomeStackParamList>()
 const TmpStack = createNativeStackNavigator<TmpStackParamList>()
+const DeskStack = createNativeStackNavigator<DeskStackParamList>()
 const AlbumStack = createNativeStackNavigator<AlbumStackParamList>()
 const Tab = createBottomTabNavigator<MainTabParamList>()
 
@@ -59,6 +62,14 @@ function TmpNavigator() {
   )
 }
 
+function DeskNavigator() {
+  return (
+    <DeskStack.Navigator>
+      <DeskStack.Screen name="Desk" component={DeskScreen} options={{ title: '机の上' }} />
+    </DeskStack.Navigator>
+  )
+}
+
 function AlbumNavigator() {
   return (
     <AlbumStack.Navigator>
@@ -77,6 +88,7 @@ function MainTabs() {
             HomeTab: 'map',
             CameraTab: 'camera',
             TmpTab: 'time',
+            DeskTab: 'document-text',
             AlbumTab: 'book',
             SettingsTab: 'settings',
           }
@@ -87,6 +99,7 @@ function MainTabs() {
       <Tab.Screen name="HomeTab" component={HomeNavigator} options={{ title: 'ホーム', headerShown: false }} />
       <Tab.Screen name="CameraTab" component={CameraNavigator} options={{ title: 'カメラ', headerShown: false }} />
       <Tab.Screen name="TmpTab" component={TmpNavigator} options={{ title: '現像待ち', headerShown: false }} />
+      <Tab.Screen name="DeskTab" component={DeskNavigator} options={{ title: '机の上', headerShown: false }} />
       <Tab.Screen name="AlbumTab" component={AlbumNavigator} options={{ title: 'アルバム', headerShown: false }} />
       <Tab.Screen name="SettingsTab" component={SettingsScreen} options={{ title: '設定' }} />
     </Tab.Navigator>

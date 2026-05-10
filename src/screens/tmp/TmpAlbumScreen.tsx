@@ -142,10 +142,7 @@ export default function TmpAlbumScreen() {
   const navigateToDeskAlbum = () => {
     if (!deskAlbumId) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(navigation.getParent() as any)?.navigate('AlbumTab', {
-      screen: 'AlbumDetail',
-      params: { albumId: deskAlbumId, albumTitle: '机' },
-    })
+    ;(navigation.getParent() as any)?.navigate('DeskTab')
   }
 
   if (loading) {
