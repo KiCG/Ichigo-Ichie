@@ -142,6 +142,9 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
   const handleCloseModal = () => {
     setSelected(null)
     setAppendText('')
+    setShowAlbumPicker(false)
+    setNewAlbumName('')
+    setShowNewAlbum(false)
   }
 
   const openAlbumPicker = async () => {
@@ -312,158 +315,160 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-          <Pressable style={styles.overlay} onPress={handleCloseModal}>
+          <Pressable
+            style={styles.overlay}
+            onPress={showAlbumPicker ? () => setShowAlbumPicker(false) : handleCloseModal}
+          >
             <Pressable style={styles.modal}>
               {selected && (
-                <>
-                  <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
+                showAlbumPicker ? (
+                  <>
+                    <View style={styles.pickerHeader}>
+                      <Text style={styles.pickerTitle}>移動先のアルバム</Text>
+                      <TouchableOpacity onPress={() => setShowAlbumPicker(false)}>
+                        <Text style={styles.pickerCancel}>キャンセル</Text>
+                      </TouchableOpacity>
+                    </View>
 
-                  {selected.isUnlocked ? (
-                    <ScrollView
-                      style={styles.modalScrollContent}
-                      bounces={false}
-                      keyboardShouldPersistTaps="handled"
-                    >
-                      {originalMsg && (
-                        <View style={styles.modalSection}>
-                          <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
-                          <Text style={styles.modalMessage}>{originalMsg.content}</Text>
-                        </View>
-                      )}
+                    {loadingAlbums ? (
+                      <ActivityIndicator color={COLORS.accent} style={{ marginVertical: 24 }} />
+                    ) : (
+                      <ScrollView style={styles.pickerScroll} keyboardShouldPersistTaps="handled">
+                        {availableAlbums.map(album => (
+                          <TouchableOpacity
+                            key={album.id}
+                            style={styles.pickerRow}
+                            onPress={() => handleMoveToAlbum(album.id)}
+                            disabled={moving}
+                          >
+                            <Text style={styles.pickerRowText}>{album.title}</Text>
+                          </TouchableOpacity>
+                        ))}
 
-                      {followUpMsgs.length > 0 && (
-                        <View style={styles.modalSection}>
-                          <Text style={styles.sectionLabel}>追記</Text>
-                          {followUpMsgs.map(fu => (
-                            <View key={fu.id} style={styles.followUpItem}>
-                              <Text style={styles.followUpContent}>{fu.content}</Text>
-                              <Text style={styles.followUpDate}>
-                                {new Date(fu.created_at).toLocaleDateString('ja-JP', {
-                                  year: 'numeric', month: 'long', day: 'numeric',
-                                })}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
-                      )}
-
-                      <View style={styles.appendSection}>
-                        <Text style={styles.sectionLabel}>追記する</Text>
-                        <TextInput
-                          style={styles.appendInput}
-                          value={appendText}
-                          onChangeText={setAppendText}
-                          placeholder="今の気持ちを書き留めておく…"
-                          placeholderTextColor={COLORS.subtext}
-                          multiline
-                          textAlignVertical="top"
-                        />
                         <TouchableOpacity
-                          style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
-                          onPress={handleAppend}
-                          disabled={!appendText.trim() || appendSaving}
+                          style={[styles.pickerRow, showNewAlbum && styles.pickerRowSelected]}
+                          onPress={() => setShowNewAlbum(v => !v)}
+                          disabled={moving}
                         >
-                          {appendSaving
-                            ? <ActivityIndicator color="#fff" size="small" />
-                            : <Text style={styles.appendButtonText}>追記を保存する</Text>
+                          <Text style={styles.pickerRowText}>＋ 新しいアルバムを作成</Text>
+                        </TouchableOpacity>
+
+                        {showNewAlbum && (
+                          <View style={styles.newAlbumRow}>
+                            <TextInput
+                              style={styles.newAlbumInput}
+                              placeholder="アルバム名"
+                              placeholderTextColor={COLORS.subtext}
+                              value={newAlbumName}
+                              onChangeText={setNewAlbumName}
+                              autoFocus
+                            />
+                            <TouchableOpacity
+                              style={[styles.newAlbumConfirm, (!newAlbumName.trim() || moving) && styles.buttonDisabled]}
+                              onPress={() => handleMoveToAlbum(null)}
+                              disabled={!newAlbumName.trim() || moving}
+                            >
+                              {moving
+                                ? <ActivityIndicator color="#fff" size="small" />
+                                : <Text style={styles.newAlbumConfirmText}>作成して移動</Text>
+                              }
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </ScrollView>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
+
+                    {selected.isUnlocked ? (
+                      <ScrollView
+                        style={styles.modalScrollContent}
+                        bounces={false}
+                        keyboardShouldPersistTaps="handled"
+                      >
+                        {originalMsg && (
+                          <View style={styles.modalSection}>
+                            <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
+                            <Text style={styles.modalMessage}>{originalMsg.content}</Text>
+                          </View>
+                        )}
+
+                        {followUpMsgs.length > 0 && (
+                          <View style={styles.modalSection}>
+                            <Text style={styles.sectionLabel}>追記</Text>
+                            {followUpMsgs.map(fu => (
+                              <View key={fu.id} style={styles.followUpItem}>
+                                <Text style={styles.followUpContent}>{fu.content}</Text>
+                                <Text style={styles.followUpDate}>
+                                  {new Date(fu.created_at).toLocaleDateString('ja-JP', {
+                                    year: 'numeric', month: 'long', day: 'numeric',
+                                  })}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        <View style={styles.appendSection}>
+                          <Text style={styles.sectionLabel}>追記する</Text>
+                          <TextInput
+                            style={styles.appendInput}
+                            value={appendText}
+                            onChangeText={setAppendText}
+                            placeholder="今の気持ちを書き留めておく…"
+                            placeholderTextColor={COLORS.subtext}
+                            multiline
+                            textAlignVertical="top"
+                          />
+                          <TouchableOpacity
+                            style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
+                            onPress={handleAppend}
+                            disabled={!appendText.trim() || appendSaving}
+                          >
+                            {appendSaving
+                              ? <ActivityIndicator color="#fff" size="small" />
+                              : <Text style={styles.appendButtonText}>追記を保存する</Text>
+                            }
+                          </TouchableOpacity>
+                        </View>
+                      </ScrollView>
+                    ) : (
+                      <View style={styles.lockedContent}>
+                        <Text style={styles.lockIconLarge}>🔒</Text>
+                        <Text style={styles.lockedHint}>
+                          この場所へ戻り同じ風景を撮影すると{'\n'}メッセージが解除されます
+                        </Text>
+                      </View>
+                    )}
+
+                    <View style={styles.modalFooter}>
+                      <Text style={styles.modalDate}>
+                        {new Date(selected.taken_at).toLocaleDateString('ja-JP', {
+                          year: 'numeric', month: 'long', day: 'numeric',
+                        })}
+                      </Text>
+                      <View style={styles.footerActions}>
+                        {showMoveAction && (
+                          <TouchableOpacity onPress={openAlbumPicker}>
+                            <Text style={styles.moveText}>アルバムに移動</Text>
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity onPress={handleDelete} disabled={deleting}>
+                          {deleting
+                            ? <ActivityIndicator size="small" color={COLORS.danger} />
+                            : <Text style={styles.deleteText}>削除</Text>
                           }
                         </TouchableOpacity>
                       </View>
-                    </ScrollView>
-                  ) : (
-                    <View style={styles.lockedContent}>
-                      <Text style={styles.lockIconLarge}>🔒</Text>
-                      <Text style={styles.lockedHint}>
-                        この場所へ戻り同じ風景を撮影すると{'\n'}メッセージが解除されます
-                      </Text>
                     </View>
-                  )}
-
-                  <View style={styles.modalFooter}>
-                    <Text style={styles.modalDate}>
-                      {new Date(selected.taken_at).toLocaleDateString('ja-JP', {
-                        year: 'numeric', month: 'long', day: 'numeric',
-                      })}
-                    </Text>
-                    <View style={styles.footerActions}>
-                      {showMoveAction && (
-                        <TouchableOpacity onPress={openAlbumPicker} style={styles.moveButton}>
-                          <Text style={styles.moveText}>アルバムに移動</Text>
-                        </TouchableOpacity>
-                      )}
-                      <TouchableOpacity onPress={handleDelete} disabled={deleting}>
-                        {deleting
-                          ? <ActivityIndicator size="small" color={COLORS.danger} />
-                          : <Text style={styles.deleteText}>削除</Text>
-                        }
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </>
+                  </>
+                )
               )}
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>
-      </Modal>
-      <Modal
-        visible={showAlbumPicker}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowAlbumPicker(false)}
-      >
-        <Pressable style={styles.pickerOverlay} onPress={() => setShowAlbumPicker(false)}>
-          <Pressable style={styles.pickerSheet}>
-            <Text style={styles.pickerTitle}>移動先のアルバム</Text>
-
-            {loadingAlbums ? (
-              <ActivityIndicator color={COLORS.accent} style={{ marginVertical: 24 }} />
-            ) : (
-              <ScrollView keyboardShouldPersistTaps="handled">
-                {availableAlbums.map(album => (
-                  <TouchableOpacity
-                    key={album.id}
-                    style={styles.pickerRow}
-                    onPress={() => handleMoveToAlbum(album.id)}
-                    disabled={moving}
-                  >
-                    <Text style={styles.pickerRowText}>{album.title}</Text>
-                  </TouchableOpacity>
-                ))}
-
-                <TouchableOpacity
-                  style={[styles.pickerRow, showNewAlbum && styles.pickerRowSelected]}
-                  onPress={() => setShowNewAlbum(v => !v)}
-                  disabled={moving}
-                >
-                  <Text style={styles.pickerRowText}>＋ 新しいアルバムを作成</Text>
-                </TouchableOpacity>
-
-                {showNewAlbum && (
-                  <View style={styles.newAlbumRow}>
-                    <TextInput
-                      style={styles.newAlbumInput}
-                      placeholder="アルバム名"
-                      placeholderTextColor={COLORS.subtext}
-                      value={newAlbumName}
-                      onChangeText={setNewAlbumName}
-                      autoFocus
-                    />
-                    <TouchableOpacity
-                      style={[styles.newAlbumConfirm, (!newAlbumName.trim() || moving) && styles.buttonDisabled]}
-                      onPress={() => handleMoveToAlbum(null)}
-                      disabled={!newAlbumName.trim() || moving}
-                    >
-                      {moving
-                        ? <ActivityIndicator color="#fff" size="small" />
-                        : <Text style={styles.newAlbumConfirmText}>作成して移動</Text>
-                      }
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </ScrollView>
-            )}
-          </Pressable>
-        </Pressable>
       </Modal>
     </View>
   )
@@ -570,30 +575,20 @@ const styles = StyleSheet.create({
   },
   modalDate: { fontSize: 12, color: COLORS.subtext },
   footerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  moveButton: {},
   moveText: { fontSize: 13, color: COLORS.accent },
   deleteText: { fontSize: 13, color: COLORS.danger },
-  pickerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
-  pickerSheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingBottom: 32,
-    maxHeight: '60%',
-  },
-  pickerTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.text,
-    textAlign: 'center',
-    paddingVertical: 16,
+  pickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: COLORS.border,
   },
+  pickerTitle: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  pickerCancel: { fontSize: 14, color: COLORS.subtext },
+  pickerScroll: { maxHeight: 320 },
   pickerRow: {
     paddingVertical: 16,
     paddingHorizontal: 20,
