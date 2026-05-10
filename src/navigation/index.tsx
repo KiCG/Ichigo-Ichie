@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -16,6 +16,7 @@ import BookshelfScreen from '../screens/album/BookshelfScreen'
 import AlbumDetailScreen from '../screens/album/AlbumDetailScreen'
 import SettingsScreen from '../screens/settings/SettingsScreen'
 
+import { registerForPushNotifications } from '../lib/notifications'
 import type {
   AuthStackParamList,
   CameraStackParamList,
@@ -103,6 +104,12 @@ function AuthNavigator() {
 
 export default function Navigation() {
   const { session, loading } = useAuth()
+
+  useEffect(() => {
+    if (session) {
+      registerForPushNotifications()
+    }
+  }, [session])
 
   if (loading) return null
 
