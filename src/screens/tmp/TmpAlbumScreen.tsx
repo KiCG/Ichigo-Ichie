@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
   },
   sectionHeader: { fontSize: 12, color: COLORS.sectionHeader, letterSpacing: 1, textTransform: 'uppercase' },
   sectionLink: { fontSize: 13, color: COLORS.accent },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   card: {
     width: ITEM_SIZE,
     borderRadius: 8,
@@ -260,6 +260,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: COLORS.border,
+    marginBottom: 16,
   },
   thumbnail: { width: '100%', height: ITEM_SIZE },
   badge: {

@@ -54,37 +54,42 @@ export default function WriteMessageScreen() {
   }, [])
 
   const fetchAlbums = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
 
-    // 机アルバムを取得（なければ作成）
-    let { data: desk } = await supabase
-      .from('albums')
-      .select('id')
-      .eq('user_id', user.id)
-      .eq('is_desk', true)
-      .single()
-
-    if (!desk) {
-      const { data: created } = await supabase
+      // 机アルバムを取得（なければ作成）
+      let { data: desk } = await supabase
         .from('albums')
-        .insert({ title: '机', user_id: user.id, is_desk: true })
         .select('id')
+        .eq('user_id', user.id)
+        .eq('is_desk', true)
         .single()
-      desk = created
+
+      if (!desk) {
+        const { data: created } = await supabase
+          .from('albums')
+          .insert({ title: '机', user_id: user.id, is_desk: true })
+          .select('id')
+          .single()
+        desk = created
+      }
+      setDeskAlbumId(desk?.id ?? null)
+
+      // 通常アルバムのみ取得
+      const { data: normalAlbums } = await supabase
+        .from('albums')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_desk', false)
+        .order('created_at', { ascending: false })
+
+      setAlbums(normalAlbums ?? [])
+    } catch (e) {
+      console.error('fetchAlbums error:', e)
+    } finally {
+      setLoadingAlbums(false)
     }
-    setDeskAlbumId(desk?.id ?? null)
-
-    // 通常アルバムのみ取得
-    const { data: normalAlbums } = await supabase
-      .from('albums')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('is_desk', false)
-      .order('created_at', { ascending: false })
-
-    setAlbums(normalAlbums ?? [])
-    setLoadingAlbums(false)
   }
 
   const createAlbum = async (userId: string): Promise<string | null> => {
