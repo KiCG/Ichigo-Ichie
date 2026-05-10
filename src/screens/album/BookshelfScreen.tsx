@@ -8,6 +8,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
@@ -82,6 +83,53 @@ export default function BookshelfScreen({ navigation }: Props) {
     setRefreshing(false)
   }, [fetchAlbums])
 
+  const handleDeleteAlbum = (album: AlbumCard) => {
+    Alert.alert(
+      'アルバムを削除しますか？',
+      `「${album.title}」を削除します。\nアルバム内の写真は机の上に移動されます。`,
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除する',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) return
+
+              const { data: deskAlbum } = await supabase
+                .from('albums')
+                .select('id')
+                .eq('user_id', user.id)
+                .eq('is_desk', true)
+                .single()
+
+              if (!deskAlbum) throw new Error('机アルバムが見つかりません')
+
+              // 写真を机に移動してからアルバムを削除
+              const { error: moveError } = await supabase
+                .from('photos')
+                .update({ album_id: deskAlbum.id })
+                .eq('album_id', album.id)
+              if (moveError) throw moveError
+
+              const { error: deleteError } = await supabase
+                .from('albums')
+                .delete()
+                .eq('id', album.id)
+              if (deleteError) throw deleteError
+
+              setAlbums(prev => prev.filter(a => a.id !== album.id))
+            } catch (e) {
+              console.error('deleteAlbum error:', e)
+              Alert.alert('エラー', '削除に失敗しました。もう一度お試しください。')
+            }
+          },
+        },
+      ]
+    )
+  }
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -109,6 +157,7 @@ export default function BookshelfScreen({ navigation }: Props) {
             <TouchableOpacity
               style={styles.card}
               onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
+              onLongPress={() => handleDeleteAlbum(item)}
               activeOpacity={0.8}
             >
               {item.coverUrl ? (
