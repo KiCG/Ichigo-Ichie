@@ -53,7 +53,7 @@ function HomeNavigator() {
 function TmpNavigator() {
   return (
     <TmpStack.Navigator>
-      <TmpStack.Screen name="TmpAlbum" component={TmpAlbumScreen} options={{ title: 'tmpアルバム' }} />
+      <TmpStack.Screen name="TmpAlbum" component={TmpAlbumScreen} options={{ title: '現像待ち' }} />
       <TmpStack.Screen name="WriteMessage" component={WriteMessageScreen} options={{ title: 'メッセージを書く' }} />
     </TmpStack.Navigator>
   )
@@ -86,7 +86,7 @@ function MainTabs() {
     >
       <Tab.Screen name="HomeTab" component={HomeNavigator} options={{ title: 'ホーム', headerShown: false }} />
       <Tab.Screen name="CameraTab" component={CameraNavigator} options={{ title: 'カメラ', headerShown: false }} />
-      <Tab.Screen name="TmpTab" component={TmpNavigator} options={{ title: 'tmp', headerShown: false }} />
+      <Tab.Screen name="TmpTab" component={TmpNavigator} options={{ title: '現像待ち', headerShown: false }} />
       <Tab.Screen name="AlbumTab" component={AlbumNavigator} options={{ title: 'アルバム', headerShown: false }} />
       <Tab.Screen name="SettingsTab" component={SettingsScreen} options={{ title: '設定' }} />
     </Tab.Navigator>
