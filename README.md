@@ -65,6 +65,7 @@ supabase/migrations/005_cron_send_notifications.sql
 supabase/migrations/006_add_desk_album.sql
 supabase/migrations/007_add_bookshelves.sql
 supabase/migrations/008_add_unlock_record_id_to_messages.sql
+supabase/migrations/009_album_sharing.sql
 ```
 
 Storage に `photos` バケットを作成し **Public** に設定後、以下の RLS ポリシーを追加：
@@ -127,9 +128,15 @@ Expo Go アプリで QR コードを読み取る。
 
 ### 未実装（今後の予定）
 
-- アルバム共有機能
+- フリーミアム制限の適用（写真枚数・アルバム数上限）
 - フリーミアム制限の適用（写真枚数・アルバム数上限）
 - 魔法の鍵（強制ロック解除のアイテム課金）
+
+### 実装済み（追加）
+
+| 機能 | 説明 |
+|---|---|
+| アルバム共有 | 共有コード（UUID）を生成して他ユーザーにアルバムを共有。写真はロック状態で共有され、受信者も同じ場所へ再訪することでロック解除可能 |
 
 ---
 

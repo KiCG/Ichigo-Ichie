@@ -40,6 +40,7 @@ export default function WriteMessageScreen() {
 
   const [message, setMessage] = useState('')
   const [albums, setAlbums] = useState<Album[]>([])
+  const [sharedAlbums, setSharedAlbums] = useState<{ id: string; title: string }[]>([])
   const [deskAlbumId, setDeskAlbumId] = useState<string | null>(null)
   const [useDeskAlbum, setUseDeskAlbum] = useState(true)
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null)
@@ -85,6 +86,18 @@ export default function WriteMessageScreen() {
         .order('created_at', { ascending: false })
 
       setAlbums(normalAlbums ?? [])
+
+      // 写真追加が許可された共有アルバムを取得
+      const { data: shareData } = await supabase
+        .from('album_shares')
+        .select('albums(id, title)')
+        .eq('shared_to_user_id', user.id)
+        .eq('can_add_photos', true)
+      setSharedAlbums(
+        (shareData ?? [])
+          .map(s => s.albums as unknown as { id: string; title: string } | null)
+          .filter((a): a is { id: string; title: string } => a !== null)
+      )
     } catch (e) {
       console.error('fetchAlbums error:', e)
     } finally {
@@ -227,6 +240,24 @@ export default function WriteMessageScreen() {
                 </TouchableOpacity>
               ))}
 
+              {sharedAlbums.map(album => (
+                <TouchableOpacity
+                  key={album.id}
+                  style={[
+                    styles.albumRow,
+                    !useDeskAlbum && selectedAlbumId === album.id && !showNewAlbum && styles.albumRowSelected,
+                  ]}
+                  onPress={() => selectAlbum(album.id)}
+                >
+                  <View style={styles.sharedAlbumRow}>
+                    <Text style={styles.albumRowText}>{album.title}</Text>
+                    <View style={styles.sharedBadge}>
+                      <Text style={styles.sharedBadgeText}>共有</Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+
               <TouchableOpacity
                 style={[styles.albumRow, !useDeskAlbum && showNewAlbum && styles.albumRowSelected]}
                 onPress={selectNewAlbum}
@@ -338,4 +369,12 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: { opacity: 0.6 },
   saveButtonText: { color: '#fff', fontSize: 15, letterSpacing: 1 },
+  sharedAlbumRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sharedBadge: {
+    backgroundColor: '#E8F0F0',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  sharedBadgeText: { fontSize: 11, color: '#4A7A7A' },
 })

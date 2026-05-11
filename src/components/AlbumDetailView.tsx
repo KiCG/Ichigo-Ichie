@@ -28,6 +28,7 @@ const COLORS = {
   subtext: '#9E9E9E',
   border: '#E0D9D0',
   followUpBg: '#F0EDE8',
+  sharedBg: '#EAF0F0',
   danger: '#C0392B',
 }
 
@@ -50,15 +51,23 @@ type UnlockEntry = {
   message: MessageEntry | null
 }
 
+type SharedEntry = {
+  unlockRecordId: string
+  unlockedAt: string
+  message: MessageEntry | null
+}
+
 type PhotoItem = {
   id: string
   image_url: string
   taken_at: string
+  user_id: string
   originalMessage: MessageEntry | null
   isUnlocked: boolean
   isFresh: boolean
   unlockEntries: UnlockEntry[]
   currentUnlockRecordId: string | null
+  othersEntries: SharedEntry[]
 }
 
 type Props = {
@@ -73,6 +82,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
   const [refreshing, setRefreshing] = useState(false)
   const [selected, setSelected] = useState<PhotoItem | null>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [canMessage, setCanMessage] = useState(false)
   const [appendText, setAppendText] = useState('')
   const [appendSaving, setAppendSaving] = useState(false)
   const [originalEditText, setOriginalEditText] = useState('')
@@ -93,21 +103,51 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
 
     const { data: photoData } = await supabase
       .from('photos')
-      .select('id, image_url, taken_at')
+      .select('id, image_url, taken_at, user_id')
       .eq('album_id', albumId)
       .order('taken_at', { ascending: false })
 
-    if (!photoData?.length) { setPhotos([]); return }
+    if (!photoData?.length) {
+      setPhotos([])
+      setCanMessage(false)
+      return
+    }
 
     const photoIds = photoData.map(p => p.id)
 
+    // Determine if this is a shared album and fetch settings
+    const { data: myShare } = await supabase
+      .from('album_shares')
+      .select('can_message')
+      .eq('album_id', albumId)
+      .eq('shared_to_user_id', user.id)
+      .maybeSingle()
+
+    let canMsgFlag = false
+    if (myShare) {
+      // Recipient view
+      canMsgFlag = myShare.can_message
+    } else {
+      // Owner view — check if any active share has can_message = true
+      const { data: ownerShare } = await supabase
+        .from('album_shares')
+        .select('id')
+        .eq('album_id', albumId)
+        .eq('can_message', true)
+        .not('shared_to_user_id', 'is', null)
+        .limit(1)
+      canMsgFlag = (ownerShare?.length ?? 0) > 0
+    }
+    setCanMessage(canMsgFlag)
+
+    const unlockBase = supabase
+      .from('unlock_records')
+      .select('id, photo_id, unlocked_at, user_id')
+      .in('photo_id', photoIds)
+      .order('unlocked_at', { ascending: true })
+
     const [{ data: unlockData }, { data: msgData }] = await Promise.all([
-      supabase
-        .from('unlock_records')
-        .select('id, photo_id, unlocked_at')
-        .eq('user_id', user.id)
-        .in('photo_id', photoIds)
-        .order('unlocked_at', { ascending: true }),
+      canMsgFlag ? unlockBase : unlockBase.eq('user_id', user.id),
       supabase
         .from('messages')
         .select('id, photo_id, content, is_original, created_at, unlock_record_id')
@@ -134,30 +174,43 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
       }
     }
 
-    const unlockEntriesMap: Record<string, UnlockEntry[]> = {}
+    const ownEntriesMap: Record<string, UnlockEntry[]> = {}
+    const othersEntriesMap: Record<string, SharedEntry[]> = {}
     for (const u of unlockData ?? []) {
-      if (!unlockEntriesMap[u.photo_id]) unlockEntriesMap[u.photo_id] = []
-      unlockEntriesMap[u.photo_id].push({
-        unlockRecordId: u.id,
-        unlockedAt: u.unlocked_at,
-        isActive: now - new Date(u.unlocked_at).getTime() <= UNLOCK_WINDOW_MS,
-        message: followUpByUnlockRecord[u.id] ?? null,
-      })
+      const msg = followUpByUnlockRecord[u.id] ?? null
+      if (u.user_id === user.id) {
+        if (!ownEntriesMap[u.photo_id]) ownEntriesMap[u.photo_id] = []
+        ownEntriesMap[u.photo_id].push({
+          unlockRecordId: u.id,
+          unlockedAt: u.unlocked_at,
+          isActive: now - new Date(u.unlocked_at).getTime() <= UNLOCK_WINDOW_MS,
+          message: msg,
+        })
+      } else {
+        if (!othersEntriesMap[u.photo_id]) othersEntriesMap[u.photo_id] = []
+        othersEntriesMap[u.photo_id].push({
+          unlockRecordId: u.id,
+          unlockedAt: u.unlocked_at,
+          message: msg,
+        })
+      }
     }
 
     setPhotos(photoData.map(p => {
-      const entries = unlockEntriesMap[p.id] ?? []
+      const entries = ownEntriesMap[p.id] ?? []
       const activeEntry = entries.find(e => e.isActive) ?? null
-      const isFresh = now - new Date(p.taken_at).getTime() <= FRESH_WINDOW_MS
+      const isFresh = p.user_id === user.id && now - new Date(p.taken_at).getTime() <= FRESH_WINDOW_MS
       return {
         id: p.id,
         image_url: p.image_url,
         taken_at: p.taken_at,
+        user_id: p.user_id,
         originalMessage: originalMsgMap[p.id] ?? null,
         isUnlocked: !!activeEntry || isFresh,
         isFresh,
         unlockEntries: entries,
         currentUnlockRecordId: activeEntry?.unlockRecordId ?? null,
+        othersEntries: othersEntriesMap[p.id] ?? [],
       }
     }))
   }, [albumId])
@@ -208,11 +261,14 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
           .select('id, content, is_original, created_at, unlock_record_id')
           .single()
         if (error) throw error
-        const updatedSelected = { ...selected, originalMessage: { ...data, unlock_record_id: data.unlock_record_id ?? null } }
+        const updatedSelected = {
+          ...selected,
+          originalMessage: { ...data, unlock_record_id: data.unlock_record_id ?? null },
+        }
         setSelected(updatedSelected)
         setPhotos(prev => prev.map(p => p.id === selected.id ? updatedSelected : p))
       }
-    } catch (e) {
+    } catch {
       Alert.alert('エラー', '保存に失敗しました。もう一度お試しください。')
     } finally {
       setOriginalSaving(false)
@@ -261,8 +317,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
       setPhotos(prev => prev.filter(p => p.id !== selected.id))
       setShowAlbumPicker(false)
       handleCloseModal()
-    } catch (e) {
-      console.error('movePhoto error:', e)
+    } catch {
       Alert.alert('エラー', '移動に失敗しました。もう一度お試しください。')
     } finally {
       setMoving(false)
@@ -285,8 +340,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
               await deletePhoto(selected.id, selected.image_url)
               setPhotos(prev => prev.filter(p => p.id !== selected.id))
               handleCloseModal()
-            } catch (e) {
-              console.error('deletePhoto error:', e)
+            } catch {
               Alert.alert('エラー', '削除に失敗しました。もう一度お試しください。')
             } finally {
               setDeleting(false)
@@ -340,6 +394,8 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
       setAppendSaving(false)
     }
   }
+
+  const isOwnPhoto = selected?.user_id === currentUserId
 
   if (loading) {
     return (
@@ -466,6 +522,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                         bounces={false}
                         keyboardShouldPersistTaps="handled"
                       >
+                        {/* Original message */}
                         <View style={styles.modalSection}>
                           <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
                           {selected.isFresh ? (
@@ -497,6 +554,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                           )}
                         </View>
 
+                        {/* Own past visits */}
                         {selected.unlockEntries.filter(e => !e.isActive && e.message).length > 0 && (
                           <View style={styles.modalSection}>
                             <Text style={styles.sectionLabel}>過去の訪問</Text>
@@ -516,36 +574,59 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                           </View>
                         )}
 
-                        <View style={styles.appendSection}>
-                          <Text style={styles.sectionLabel}>
-                            {new Date(
-                              selected.unlockEntries.find(e => e.isActive)?.unlockedAt ?? ''
-                            ).toLocaleDateString('ja-JP', {
-                              year: 'numeric', month: 'long', day: 'numeric',
-                            })} の記録
-                          </Text>
-                          <TextInput
-                            style={styles.appendInput}
-                            value={appendText}
-                            onChangeText={setAppendText}
-                            placeholder="今の気持ちを書き留めておく…"
-                            placeholderTextColor={COLORS.subtext}
-                            multiline
-                            textAlignVertical="top"
-                          />
-                          <TouchableOpacity
-                            style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
-                            onPress={handleSaveFollowUp}
-                            disabled={!appendText.trim() || appendSaving}
-                          >
-                            {appendSaving
-                              ? <ActivityIndicator color="#fff" size="small" />
-                              : <Text style={styles.appendButtonText}>
-                                  {selected.unlockEntries.find(e => e.isActive)?.message ? '更新する' : '保存する'}
-                                </Text>
+                        {/* Own active visit */}
+                        {selected.currentUnlockRecordId && (
+                          <View style={styles.appendSection}>
+                            <Text style={styles.sectionLabel}>
+                              {new Date(
+                                selected.unlockEntries.find(e => e.isActive)?.unlockedAt ?? ''
+                              ).toLocaleDateString('ja-JP', {
+                                year: 'numeric', month: 'long', day: 'numeric',
+                              })} の記録
+                            </Text>
+                            <TextInput
+                              style={styles.appendInput}
+                              value={appendText}
+                              onChangeText={setAppendText}
+                              placeholder="今の気持ちを書き留めておく…"
+                              placeholderTextColor={COLORS.subtext}
+                              multiline
+                              textAlignVertical="top"
+                            />
+                            <TouchableOpacity
+                              style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
+                              onPress={handleSaveFollowUp}
+                              disabled={!appendText.trim() || appendSaving}
+                            >
+                              {appendSaving
+                                ? <ActivityIndicator color="#fff" size="small" />
+                                : <Text style={styles.appendButtonText}>
+                                    {selected.unlockEntries.find(e => e.isActive)?.message ? '更新する' : '保存する'}
+                                  </Text>
+                              }
+                            </TouchableOpacity>
+                          </View>
+                        )}
+
+                        {/* Others' visit records (can_message = true) */}
+                        {canMessage && selected.othersEntries.filter(e => e.message).length > 0 && (
+                          <View style={styles.modalSection}>
+                            <Text style={styles.sectionLabel}>共有者の訪問記録</Text>
+                            {selected.othersEntries
+                              .filter(e => e.message)
+                              .map(e => (
+                                <View key={e.unlockRecordId} style={styles.sharedEntry}>
+                                  <Text style={styles.followUpDate}>
+                                    {new Date(e.unlockedAt).toLocaleDateString('ja-JP', {
+                                      year: 'numeric', month: 'long', day: 'numeric',
+                                    })}
+                                  </Text>
+                                  <Text style={styles.followUpContent}>{e.message!.content}</Text>
+                                </View>
+                              ))
                             }
-                          </TouchableOpacity>
-                        </View>
+                          </View>
+                        )}
                       </ScrollView>
                     ) : (
                       <View style={styles.lockedContent}>
@@ -563,17 +644,19 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                         })}
                       </Text>
                       <View style={styles.footerActions}>
-                        {showMoveAction && (
+                        {showMoveAction && isOwnPhoto && (
                           <TouchableOpacity onPress={openAlbumPicker}>
                             <Text style={styles.moveText}>アルバムに移動</Text>
                           </TouchableOpacity>
                         )}
-                        <TouchableOpacity onPress={handleDelete} disabled={deleting}>
-                          {deleting
-                            ? <ActivityIndicator size="small" color={COLORS.danger} />
-                            : <Text style={styles.deleteText}>削除</Text>
-                          }
-                        </TouchableOpacity>
+                        {isOwnPhoto && (
+                          <TouchableOpacity onPress={handleDelete} disabled={deleting}>
+                            {deleting
+                              ? <ActivityIndicator size="small" color={COLORS.danger} />
+                              : <Text style={styles.deleteText}>削除</Text>
+                            }
+                          </TouchableOpacity>
+                        )}
                       </View>
                     </View>
                   </>
@@ -621,7 +704,7 @@ const styles = StyleSheet.create({
     maxHeight: '88%',
   },
   modalImage: { width: '100%', height: 220 },
-  modalScrollContent: { maxHeight: 320 },
+  modalScrollContent: { maxHeight: 340 },
   modalSection: { padding: 16, gap: 6 },
   sectionLabel: {
     fontSize: 11,
@@ -633,6 +716,13 @@ const styles = StyleSheet.create({
   modalMessage: { fontSize: 15, color: COLORS.text, lineHeight: 24 },
   followUpItem: {
     backgroundColor: COLORS.followUpBg,
+    borderRadius: 8,
+    padding: 10,
+    gap: 4,
+    marginTop: 8,
+  },
+  sharedEntry: {
+    backgroundColor: COLORS.sharedBg,
     borderRadius: 8,
     padding: 10,
     gap: 4,
