@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -9,10 +9,14 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  Modal,
+  TextInput,
+  Pressable,
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
+import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../../lib/supabase'
-import type { AlbumStackParamList } from '../../types'
+import type { BookshelfStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -23,70 +27,120 @@ const COLORS = {
 }
 
 type Props = {
-  navigation: NativeStackNavigationProp<AlbumStackParamList, 'Bookshelf'>
+  navigation: NativeStackNavigationProp<BookshelfStackParamList, 'Bookshelf'>
 }
 
-type AlbumCard = {
+type BookshelfCard = {
   id: string
   title: string
+  albumCount: number
   coverUrl: string | null
-  photoCount: number
 }
 
 export default function BookshelfScreen({ navigation }: Props) {
-  const [albums, setAlbums] = useState<AlbumCard[]>([])
+  const [bookshelves, setBookshelves] = useState<BookshelfCard[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
 
-  const fetchAlbums = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    const { data: albumData } = await supabase
-      .from('albums')
-      .select('id, title')
-      .eq('user_id', user.id)
-      .eq('is_desk', false)
-      .order('created_at', { ascending: false })
+    const [{ data: shelfData }, { data: albumData }] = await Promise.all([
+      supabase
+        .from('bookshelves')
+        .select('id, title')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('albums')
+        .select('id, bookshelf_id')
+        .eq('user_id', user.id)
+        .eq('is_desk', false)
+        .not('bookshelf_id', 'is', null),
+    ])
 
-    if (!albumData?.length) { setAlbums([]); return }
+    if (!shelfData?.length) { setBookshelves([]); return }
 
-    const albumIds = albumData.map(a => a.id)
-    const { data: photoData } = await supabase
-      .from('photos')
-      .select('id, album_id, image_url')
-      .in('album_id', albumIds)
-      .order('taken_at', { ascending: true })
+    const albumIds = (albumData ?? []).map(a => a.id)
+    const { data: photoData } = albumIds.length
+      ? await supabase
+          .from('photos')
+          .select('album_id, image_url')
+          .in('album_id', albumIds)
+          .order('taken_at', { ascending: true })
+      : { data: [] }
 
-    const statsMap: Record<string, { count: number; coverUrl: string | null }> = {}
+    const coverByAlbum: Record<string, string> = {}
     for (const p of photoData ?? []) {
-      if (!statsMap[p.album_id]) statsMap[p.album_id] = { count: 0, coverUrl: null }
-      statsMap[p.album_id].count++
-      if (!statsMap[p.album_id].coverUrl) statsMap[p.album_id].coverUrl = p.image_url
+      if (!coverByAlbum[p.album_id]) coverByAlbum[p.album_id] = p.image_url
     }
 
-    setAlbums(albumData.map(a => ({
-      id: a.id,
-      title: a.title,
-      coverUrl: statsMap[a.id]?.coverUrl ?? null,
-      photoCount: statsMap[a.id]?.count ?? 0,
+    const shelfStats: Record<string, { count: number; coverUrl: string | null }> = {}
+    for (const a of albumData ?? []) {
+      if (!a.bookshelf_id) continue
+      if (!shelfStats[a.bookshelf_id]) shelfStats[a.bookshelf_id] = { count: 0, coverUrl: null }
+      shelfStats[a.bookshelf_id].count++
+      if (!shelfStats[a.bookshelf_id].coverUrl) {
+        shelfStats[a.bookshelf_id].coverUrl = coverByAlbum[a.id] ?? null
+      }
+    }
+
+    setBookshelves(shelfData.map(s => ({
+      id: s.id,
+      title: s.title,
+      albumCount: shelfStats[s.id]?.count ?? 0,
+      coverUrl: shelfStats[s.id]?.coverUrl ?? null,
     })))
   }, [])
 
-  useEffect(() => {
-    fetchAlbums().finally(() => setLoading(false))
-  }, [fetchAlbums])
+  const isFirstLoad = useRef(true)
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstLoad.current) {
+        fetchData().finally(() => { setLoading(false); isFirstLoad.current = false })
+      } else {
+        fetchData()
+      }
+    }, [fetchData])
+  )
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    await fetchAlbums()
+    await fetchData()
     setRefreshing(false)
-  }, [fetchAlbums])
+  }, [fetchData])
 
-  const handleDeleteAlbum = (album: AlbumCard) => {
+  const handleCreateBookshelf = async () => {
+    if (!newName.trim()) return
+    setCreating(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data, error } = await supabase
+        .from('bookshelves')
+        .insert({ title: newName.trim(), user_id: user.id })
+        .select('id, title')
+        .single()
+      if (error) throw error
+      setBookshelves(prev => [{ id: data.id, title: data.title, albumCount: 0, coverUrl: null }, ...prev])
+      setNewName('')
+      setShowCreate(false)
+    } catch (e) {
+      Alert.alert('エラー', '作成に失敗しました。もう一度お試しください。')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleDelete = (shelf: BookshelfCard) => {
     Alert.alert(
-      'アルバムを削除しますか？',
-      `「${album.title}」を削除します。\nアルバム内の写真は机の上に移動されます。`,
+      '本棚を削除しますか？',
+      `「${shelf.title}」を削除します。\n中のアルバムは片付けていない状態に戻ります。`,
       [
         { text: 'キャンセル', style: 'cancel' },
         {
@@ -94,34 +148,10 @@ export default function BookshelfScreen({ navigation }: Props) {
           style: 'destructive',
           onPress: async () => {
             try {
-              const { data: { user } } = await supabase.auth.getUser()
-              if (!user) return
-
-              const { data: deskAlbum } = await supabase
-                .from('albums')
-                .select('id')
-                .eq('user_id', user.id)
-                .eq('is_desk', true)
-                .single()
-
-              if (!deskAlbum) throw new Error('机アルバムが見つかりません')
-
-              // 写真を机に移動してからアルバムを削除
-              const { error: moveError } = await supabase
-                .from('photos')
-                .update({ album_id: deskAlbum.id })
-                .eq('album_id', album.id)
-              if (moveError) throw moveError
-
-              const { error: deleteError } = await supabase
-                .from('albums')
-                .delete()
-                .eq('id', album.id)
-              if (deleteError) throw deleteError
-
-              setAlbums(prev => prev.filter(a => a.id !== album.id))
+              const { error } = await supabase.from('bookshelves').delete().eq('id', shelf.id)
+              if (error) throw error
+              setBookshelves(prev => prev.filter(s => s.id !== shelf.id))
             } catch (e) {
-              console.error('deleteAlbum error:', e)
               Alert.alert('エラー', '削除に失敗しました。もう一度お試しください。')
             }
           },
@@ -140,51 +170,88 @@ export default function BookshelfScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {albums.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyText}>アルバムがありません</Text>
-          <Text style={styles.emptySubtext}>写真を撮ってメッセージを残すとアルバムが作られます</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={albums}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
-          }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
-              onLongPress={() => handleDeleteAlbum(item)}
-              activeOpacity={0.8}
-            >
-              {item.coverUrl ? (
-                <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
-              ) : (
-                <View style={[styles.cover, styles.coverPlaceholder]}>
-                  <Text style={styles.coverPlaceholderText}>写真なし</Text>
-                </View>
-              )}
-              <View style={styles.cardBody}>
-                <Text style={styles.albumTitle} numberOfLines={2}>{item.title}</Text>
-                <Text style={styles.photoCount}>{item.photoCount}枚</Text>
+      <FlatList
+        data={bookshelves}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
+        }
+        ListHeaderComponent={
+          <TouchableOpacity style={styles.createBtn} onPress={() => setShowCreate(true)}>
+            <Text style={styles.createBtnText}>＋ 新しい本棚を作成</Text>
+          </TouchableOpacity>
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyWrap}>
+            <Text style={styles.emptyText}>本棚がありません</Text>
+            <Text style={styles.emptySubtext}>上のボタンから本棚を作成してください</Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => navigation.navigate('BookshelfDetail', { bookshelfId: item.id, bookshelfTitle: item.title })}
+            onLongPress={() => handleDelete(item)}
+            activeOpacity={0.8}
+          >
+            {item.coverUrl ? (
+              <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
+            ) : (
+              <View style={[styles.cover, styles.coverPlaceholder]}>
+                <Text style={styles.placeholderIcon}>📚</Text>
               </View>
+            )}
+            <View style={styles.cardBody}>
+              <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
+              <Text style={styles.cardSub}>{item.albumCount}冊</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+      />
+
+      <Modal visible={showCreate} animationType="fade" transparent onRequestClose={() => setShowCreate(false)}>
+        <Pressable style={styles.overlay} onPress={() => setShowCreate(false)}>
+          <Pressable style={styles.createModal}>
+            <Text style={styles.modalTitle}>新しい本棚を作成</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="本棚の名前"
+              placeholderTextColor={COLORS.subtext}
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+            />
+            <TouchableOpacity
+              style={[styles.confirmBtn, (!newName.trim() || creating) && styles.btnDisabled]}
+              onPress={handleCreateBookshelf}
+              disabled={!newName.trim() || creating}
+            >
+              {creating
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={styles.confirmBtnText}>作成する</Text>
+              }
             </TouchableOpacity>
-          )}
-        />
-      )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 },
-  emptyText: { fontSize: 15, color: COLORS.text, textAlign: 'center' },
-  emptySubtext: { fontSize: 13, color: COLORS.subtext, textAlign: 'center', lineHeight: 20 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { padding: 16, gap: 12 },
+  createBtn: {
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  createBtnText: { color: COLORS.accent, fontSize: 14, fontWeight: '500' },
   card: {
     flexDirection: 'row',
     backgroundColor: '#fff',
@@ -195,16 +262,47 @@ const styles = StyleSheet.create({
   },
   cover: { width: 100, height: 100 },
   coverPlaceholder: {
-    backgroundColor: COLORS.border,
+    backgroundColor: '#EDE8E0',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  coverPlaceholderText: { fontSize: 11, color: COLORS.subtext },
-  cardBody: {
+  placeholderIcon: { fontSize: 28 },
+  cardBody: { flex: 1, padding: 16, justifyContent: 'space-between' },
+  cardTitle: { fontSize: 15, color: COLORS.text, fontWeight: '500', lineHeight: 21 },
+  cardSub: { fontSize: 12, color: COLORS.subtext },
+  emptyWrap: { marginTop: 32, alignItems: 'center', gap: 8 },
+  emptyText: { fontSize: 15, color: COLORS.text, textAlign: 'center' },
+  emptySubtext: { fontSize: 13, color: COLORS.subtext, textAlign: 'center', lineHeight: 20 },
+  overlay: {
     flex: 1,
-    padding: 16,
-    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
   },
-  albumTitle: { fontSize: 16, color: COLORS.text, fontWeight: '500', lineHeight: 22 },
-  photoCount: { fontSize: 12, color: COLORS.subtext },
+  createModal: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    gap: 12,
+  },
+  modalTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  input: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: COLORS.text,
+  },
+  confirmBtn: {
+    backgroundColor: COLORS.accent,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  btnDisabled: { opacity: 0.45 },
+  confirmBtnText: { color: '#fff', fontSize: 14, fontWeight: '500' },
 })

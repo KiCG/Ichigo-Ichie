@@ -90,7 +90,13 @@ export type DeskStackParamList = {
 }
 
 export type AlbumStackParamList = {
+  AlbumList: undefined
+  AlbumDetail: { albumId: string; albumTitle: string }
+}
+
+export type BookshelfStackParamList = {
   Bookshelf: undefined
+  BookshelfDetail: { bookshelfId: string; bookshelfTitle: string }
   AlbumDetail: { albumId: string; albumTitle: string }
 }
 
@@ -100,5 +106,6 @@ export type MainTabParamList = {
   TmpTab: undefined
   DeskTab: undefined
   AlbumTab: undefined
+  BookshelfTab: undefined
   SettingsTab: undefined
 }

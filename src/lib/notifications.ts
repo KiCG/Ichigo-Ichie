@@ -32,10 +32,15 @@ export async function registerForPushNotifications(): Promise<void> {
       })
     }
 
-    const projectId = (Constants.expoConfig?.extra?.eas?.projectId as string | undefined)
-    const tokenData = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : {}
+    const projectId = (
+      Constants.easConfig?.projectId ??
+      (Constants.expoConfig?.extra?.eas?.projectId as string | undefined)
     )
+    if (!projectId) {
+      console.warn('push token: projectId not found. Run `eas init` to configure.')
+      return
+    }
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId })
 
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return

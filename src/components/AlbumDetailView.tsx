@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
@@ -32,20 +32,33 @@ const COLORS = {
 }
 
 const ITEM_SIZE = (Dimensions.get('window').width - 48) / 2
+const UNLOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+const FRESH_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
 
 type MessageEntry = {
   id: string
   content: string
   is_original: boolean
   created_at: string
+  unlock_record_id: string | null
+}
+
+type UnlockEntry = {
+  unlockRecordId: string
+  unlockedAt: string
+  isActive: boolean
+  message: MessageEntry | null
 }
 
 type PhotoItem = {
   id: string
   image_url: string
   taken_at: string
-  messages: MessageEntry[]
+  originalMessage: MessageEntry | null
   isUnlocked: boolean
+  isFresh: boolean
+  unlockEntries: UnlockEntry[]
+  currentUnlockRecordId: string | null
 }
 
 type Props = {
@@ -62,6 +75,8 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [appendText, setAppendText] = useState('')
   const [appendSaving, setAppendSaving] = useState(false)
+  const [originalEditText, setOriginalEditText] = useState('')
+  const [originalSaving, setOriginalSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   const [showAlbumPicker, setShowAlbumPicker] = useState(false)
@@ -89,36 +104,62 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
     const [{ data: unlockData }, { data: msgData }] = await Promise.all([
       supabase
         .from('unlock_records')
-        .select('photo_id')
+        .select('id, photo_id, unlocked_at')
         .eq('user_id', user.id)
-        .in('photo_id', photoIds),
+        .in('photo_id', photoIds)
+        .order('unlocked_at', { ascending: true }),
       supabase
         .from('messages')
-        .select('id, photo_id, content, is_original, created_at')
+        .select('id, photo_id, content, is_original, created_at, unlock_record_id')
         .in('photo_id', photoIds)
         .order('created_at', { ascending: true }),
     ])
 
-    const unlockedSet = new Set((unlockData ?? []).map(u => u.photo_id as string))
+    const now = Date.now()
 
-    const msgMap: Record<string, MessageEntry[]> = {}
-    for (const m of (msgData ?? [])) {
-      if (!msgMap[m.photo_id]) msgMap[m.photo_id] = []
-      msgMap[m.photo_id].push({
+    const originalMsgMap: Record<string, MessageEntry> = {}
+    const followUpByUnlockRecord: Record<string, MessageEntry> = {}
+    for (const m of msgData ?? []) {
+      const entry: MessageEntry = {
         id: m.id,
         content: m.content,
         is_original: m.is_original,
         created_at: m.created_at,
+        unlock_record_id: m.unlock_record_id ?? null,
+      }
+      if (m.is_original) {
+        originalMsgMap[m.photo_id] = entry
+      } else if (m.unlock_record_id) {
+        followUpByUnlockRecord[m.unlock_record_id] = entry
+      }
+    }
+
+    const unlockEntriesMap: Record<string, UnlockEntry[]> = {}
+    for (const u of unlockData ?? []) {
+      if (!unlockEntriesMap[u.photo_id]) unlockEntriesMap[u.photo_id] = []
+      unlockEntriesMap[u.photo_id].push({
+        unlockRecordId: u.id,
+        unlockedAt: u.unlocked_at,
+        isActive: now - new Date(u.unlocked_at).getTime() <= UNLOCK_WINDOW_MS,
+        message: followUpByUnlockRecord[u.id] ?? null,
       })
     }
 
-    setPhotos(photoData.map(p => ({
-      id: p.id,
-      image_url: p.image_url,
-      taken_at: p.taken_at,
-      messages: msgMap[p.id] ?? [],
-      isUnlocked: unlockedSet.has(p.id),
-    })))
+    setPhotos(photoData.map(p => {
+      const entries = unlockEntriesMap[p.id] ?? []
+      const activeEntry = entries.find(e => e.isActive) ?? null
+      const isFresh = now - new Date(p.taken_at).getTime() <= FRESH_WINDOW_MS
+      return {
+        id: p.id,
+        image_url: p.image_url,
+        taken_at: p.taken_at,
+        originalMessage: originalMsgMap[p.id] ?? null,
+        isUnlocked: !!activeEntry || isFresh,
+        isFresh,
+        unlockEntries: entries,
+        currentUnlockRecordId: activeEntry?.unlockRecordId ?? null,
+      }
+    }))
   }, [albumId])
 
   const isFirstLoad = useRef(true)
@@ -139,12 +180,43 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
     setRefreshing(false)
   }, [fetchPhotos])
 
+  const handleSelectPhoto = (item: PhotoItem) => {
+    const activeEntry = item.unlockEntries.find(e => e.isActive)
+    setAppendText(activeEntry?.message?.content ?? '')
+    setOriginalEditText(item.originalMessage?.content ?? '')
+    setSelected(item)
+  }
+
   const handleCloseModal = () => {
     setSelected(null)
     setAppendText('')
+    setOriginalEditText('')
     setShowAlbumPicker(false)
     setNewAlbumName('')
     setShowNewAlbum(false)
+  }
+
+  const handleSaveOriginal = async () => {
+    if (!originalEditText.trim() || !selected || !currentUserId) return
+    setOriginalSaving(true)
+    try {
+      if (selected.originalMessage) {
+        const { data, error } = await supabase
+          .from('messages')
+          .update({ content: originalEditText.trim() })
+          .eq('id', selected.originalMessage.id)
+          .select('id, content, is_original, created_at, unlock_record_id')
+          .single()
+        if (error) throw error
+        const updatedSelected = { ...selected, originalMessage: { ...data, unlock_record_id: data.unlock_record_id ?? null } }
+        setSelected(updatedSelected)
+        setPhotos(prev => prev.map(p => p.id === selected.id ? updatedSelected : p))
+      }
+    } catch (e) {
+      Alert.alert('エラー', '保存に失敗しました。もう一度お試しください。')
+    } finally {
+      setOriginalSaving(false)
+    }
   }
 
   const openAlbumPicker = async () => {
@@ -158,7 +230,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
       .from('albums')
       .select('id, title')
       .eq('user_id', user.id)
-      .eq('is_desk', false)
+      .neq('id', albumId)
       .order('created_at', { ascending: false })
     setAvailableAlbums(data ?? [])
     setLoadingAlbums(false)
@@ -169,7 +241,6 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
     setMoving(true)
     try {
       let finalAlbumId = targetAlbumId
-
       if (targetAlbumId === null) {
         if (!newAlbumName.trim()) return
         const { data: { user } } = await supabase.auth.getUser()
@@ -182,13 +253,11 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
         if (!data) throw new Error('アルバムの作成に失敗しました')
         finalAlbumId = data.id
       }
-
       const { error } = await supabase
         .from('photos')
         .update({ album_id: finalAlbumId })
         .eq('id', selected.id)
       if (error) throw error
-
       setPhotos(prev => prev.filter(p => p.id !== selected.id))
       setShowAlbumPicker(false)
       handleCloseModal()
@@ -228,27 +297,45 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
     )
   }
 
-  const handleAppend = async () => {
-    if (!appendText.trim() || !selected || !currentUserId) return
+  const handleSaveFollowUp = async () => {
+    if (!appendText.trim() || !selected || !currentUserId || !selected.currentUnlockRecordId) return
     setAppendSaving(true)
     try {
-      const { data, error } = await supabase
-        .from('messages')
-        .insert({
-          photo_id: selected.id,
-          content: appendText.trim(),
-          author_id: currentUserId,
-          is_original: false,
-        })
-        .select('id, content, is_original, created_at')
-        .single()
-      if (error) throw error
+      const activeEntry = selected.unlockEntries.find(e => e.isActive)
+      const existingMsg = activeEntry?.message ?? null
 
-      const newMsg = data as MessageEntry
-      const updatedSelected = { ...selected, messages: [...selected.messages, newMsg] }
+      let savedMsg: MessageEntry
+      if (existingMsg) {
+        const { data, error } = await supabase
+          .from('messages')
+          .update({ content: appendText.trim() })
+          .eq('id', existingMsg.id)
+          .select('id, content, is_original, created_at, unlock_record_id')
+          .single()
+        if (error) throw error
+        savedMsg = { ...data, unlock_record_id: data.unlock_record_id ?? null }
+      } else {
+        const { data, error } = await supabase
+          .from('messages')
+          .insert({
+            photo_id: selected.id,
+            content: appendText.trim(),
+            author_id: currentUserId,
+            is_original: false,
+            unlock_record_id: selected.currentUnlockRecordId,
+          })
+          .select('id, content, is_original, created_at, unlock_record_id')
+          .single()
+        if (error) throw error
+        savedMsg = { ...data, unlock_record_id: data.unlock_record_id ?? null }
+      }
+
+      const updatedEntries = selected.unlockEntries.map(e =>
+        e.isActive ? { ...e, message: savedMsg } : e
+      )
+      const updatedSelected = { ...selected, unlockEntries: updatedEntries }
       setSelected(updatedSelected)
       setPhotos(prev => prev.map(p => p.id === selected.id ? updatedSelected : p))
-      setAppendText('')
     } finally {
       setAppendSaving(false)
     }
@@ -261,9 +348,6 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
       </View>
     )
   }
-
-  const originalMsg = selected?.messages.find(m => m.is_original)
-  const followUpMsgs = selected?.messages.filter(m => !m.is_original) ?? []
 
   return (
     <View style={styles.container}>
@@ -283,25 +367,22 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
           }
-          renderItem={({ item }) => {
-            const original = item.messages.find(m => m.is_original)
-            return (
-              <TouchableOpacity style={styles.card} onPress={() => setSelected(item)} activeOpacity={0.85}>
-                <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
-                {item.isUnlocked ? (
-                  original ? (
-                    <View style={styles.cardBody}>
-                      <Text style={styles.messagePreview} numberOfLines={2}>{original.content}</Text>
-                    </View>
-                  ) : null
-                ) : (
-                  <View style={styles.cardLock}>
-                    <Text style={styles.lockIcon}>🔒</Text>
+          renderItem={({ item }) => (
+            <TouchableOpacity style={styles.card} onPress={() => handleSelectPhoto(item)} activeOpacity={0.85}>
+              <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
+              {item.isUnlocked ? (
+                item.originalMessage ? (
+                  <View style={styles.cardBody}>
+                    <Text style={styles.messagePreview} numberOfLines={2}>{item.originalMessage.content}</Text>
                   </View>
-                )}
-              </TouchableOpacity>
-            )
-          }}
+                ) : null
+              ) : (
+                <View style={styles.cardLock}>
+                  <Text style={styles.lockIcon}>🔒</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
         />
       )}
 
@@ -329,7 +410,6 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                         <Text style={styles.pickerCancel}>キャンセル</Text>
                       </TouchableOpacity>
                     </View>
-
                     {loadingAlbums ? (
                       <ActivityIndicator color={COLORS.accent} style={{ marginVertical: 24 }} />
                     ) : (
@@ -344,7 +424,6 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                             <Text style={styles.pickerRowText}>{album.title}</Text>
                           </TouchableOpacity>
                         ))}
-
                         <TouchableOpacity
                           style={[styles.pickerRow, showNewAlbum && styles.pickerRowSelected]}
                           onPress={() => setShowNewAlbum(v => !v)}
@@ -352,7 +431,6 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                         >
                           <Text style={styles.pickerRowText}>＋ 新しいアルバムを作成</Text>
                         </TouchableOpacity>
-
                         {showNewAlbum && (
                           <View style={styles.newAlbumRow}>
                             <TextInput
@@ -388,31 +466,64 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                         bounces={false}
                         keyboardShouldPersistTaps="handled"
                       >
-                        {originalMsg && (
-                          <View style={styles.modalSection}>
-                            <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
-                            <Text style={styles.modalMessage}>{originalMsg.content}</Text>
-                          </View>
-                        )}
+                        <View style={styles.modalSection}>
+                          <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
+                          {selected.isFresh ? (
+                            <>
+                              <TextInput
+                                style={styles.appendInput}
+                                value={originalEditText}
+                                onChangeText={setOriginalEditText}
+                                placeholder="メッセージを書く…"
+                                placeholderTextColor={COLORS.subtext}
+                                multiline
+                                textAlignVertical="top"
+                              />
+                              <TouchableOpacity
+                                style={[styles.appendButton, (!originalEditText.trim() || originalSaving) && styles.buttonDisabled]}
+                                onPress={handleSaveOriginal}
+                                disabled={!originalEditText.trim() || originalSaving}
+                              >
+                                {originalSaving
+                                  ? <ActivityIndicator color="#fff" size="small" />
+                                  : <Text style={styles.appendButtonText}>更新する</Text>
+                                }
+                              </TouchableOpacity>
+                            </>
+                          ) : (
+                            selected.originalMessage
+                              ? <Text style={styles.modalMessage}>{selected.originalMessage.content}</Text>
+                              : null
+                          )}
+                        </View>
 
-                        {followUpMsgs.length > 0 && (
+                        {selected.unlockEntries.filter(e => !e.isActive && e.message).length > 0 && (
                           <View style={styles.modalSection}>
-                            <Text style={styles.sectionLabel}>追記</Text>
-                            {followUpMsgs.map(fu => (
-                              <View key={fu.id} style={styles.followUpItem}>
-                                <Text style={styles.followUpContent}>{fu.content}</Text>
-                                <Text style={styles.followUpDate}>
-                                  {new Date(fu.created_at).toLocaleDateString('ja-JP', {
-                                    year: 'numeric', month: 'long', day: 'numeric',
-                                  })}
-                                </Text>
-                              </View>
-                            ))}
+                            <Text style={styles.sectionLabel}>過去の訪問</Text>
+                            {selected.unlockEntries
+                              .filter(e => !e.isActive && e.message)
+                              .map(e => (
+                                <View key={e.unlockRecordId} style={styles.followUpItem}>
+                                  <Text style={styles.followUpDate}>
+                                    {new Date(e.unlockedAt).toLocaleDateString('ja-JP', {
+                                      year: 'numeric', month: 'long', day: 'numeric',
+                                    })}
+                                  </Text>
+                                  <Text style={styles.followUpContent}>{e.message!.content}</Text>
+                                </View>
+                              ))
+                            }
                           </View>
                         )}
 
                         <View style={styles.appendSection}>
-                          <Text style={styles.sectionLabel}>追記する</Text>
+                          <Text style={styles.sectionLabel}>
+                            {new Date(
+                              selected.unlockEntries.find(e => e.isActive)?.unlockedAt ?? ''
+                            ).toLocaleDateString('ja-JP', {
+                              year: 'numeric', month: 'long', day: 'numeric',
+                            })} の記録
+                          </Text>
                           <TextInput
                             style={styles.appendInput}
                             value={appendText}
@@ -424,12 +535,14 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                           />
                           <TouchableOpacity
                             style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
-                            onPress={handleAppend}
+                            onPress={handleSaveFollowUp}
                             disabled={!appendText.trim() || appendSaving}
                           >
                             {appendSaving
                               ? <ActivityIndicator color="#fff" size="small" />
-                              : <Text style={styles.appendButtonText}>追記を保存する</Text>
+                              : <Text style={styles.appendButtonText}>
+                                  {selected.unlockEntries.find(e => e.isActive)?.message ? '更新する' : '保存する'}
+                                </Text>
                             }
                           </TouchableOpacity>
                         </View>
@@ -525,8 +638,8 @@ const styles = StyleSheet.create({
     gap: 4,
     marginTop: 8,
   },
-  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 20 },
   followUpDate: { fontSize: 11, color: COLORS.subtext },
+  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 20 },
   appendSection: {
     padding: 16,
     gap: 8,

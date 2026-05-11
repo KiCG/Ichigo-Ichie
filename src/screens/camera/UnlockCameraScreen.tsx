@@ -30,7 +30,8 @@ const COLORS = {
   followUpBg: '#F0EDE8',
 }
 
-const UNLOCK_RADIUS_M = 50
+const UNLOCK_RADIUS_M = 100
+const UNLOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 type UnlockRoute = RouteProp<HomeStackParamList, 'UnlockCamera'>
 type UnlockNav = NativeStackNavigationProp<HomeStackParamList, 'UnlockCamera'>
@@ -43,10 +44,11 @@ type PhotoData = {
   message: string | null
 }
 
-type FollowUp = {
-  id: string
-  content: string
-  created_at: string
+type UnlockEntry = {
+  unlockRecordId: string
+  unlockedAt: string
+  isActive: boolean
+  message: { id: string; content: string } | null
 }
 
 type Step = 'loading' | 'tooFar' | 'ready' | 'checking' | 'unlocked' | 'failed'
@@ -77,18 +79,43 @@ export default function UnlockCameraScreen() {
   const [capturing, setCapturing] = useState(false)
 
   const [userId, setUserId] = useState<string | null>(null)
-  const [followUps, setFollowUps] = useState<FollowUp[]>([])
+  const [unlockEntries, setUnlockEntries] = useState<UnlockEntry[]>([])
+  const [currentUnlockRecordId, setCurrentUnlockRecordId] = useState<string | null>(null)
   const [newFollowUp, setNewFollowUp] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const fetchFollowUps = useCallback(async (pid: string) => {
-    const { data } = await supabase
-      .from('messages')
-      .select('id, content, created_at')
-      .eq('photo_id', pid)
-      .eq('is_original', false)
-      .order('created_at', { ascending: true })
-    setFollowUps(data ?? [])
+  const fetchUnlockEntries = useCallback(async (pid: string, uid: string) => {
+    const [{ data: unlockData }, { data: msgData }] = await Promise.all([
+      supabase
+        .from('unlock_records')
+        .select('id, unlocked_at')
+        .eq('user_id', uid)
+        .eq('photo_id', pid)
+        .order('unlocked_at', { ascending: true }),
+      supabase
+        .from('messages')
+        .select('id, content, unlock_record_id')
+        .eq('photo_id', pid)
+        .eq('is_original', false),
+    ])
+
+    const msgByUnlock: Record<string, { id: string; content: string }> = {}
+    for (const m of msgData ?? []) {
+      if (m.unlock_record_id) msgByUnlock[m.unlock_record_id] = { id: m.id, content: m.content }
+    }
+
+    const now = Date.now()
+    const entries: UnlockEntry[] = (unlockData ?? []).map(u => ({
+      unlockRecordId: u.id,
+      unlockedAt: u.unlocked_at,
+      isActive: now - new Date(u.unlocked_at).getTime() <= UNLOCK_WINDOW_MS,
+      message: msgByUnlock[u.id] ?? null,
+    }))
+
+    setUnlockEntries(entries)
+    const active = entries.find(e => e.isActive)
+    setCurrentUnlockRecordId(active?.unlockRecordId ?? null)
+    setNewFollowUp(active?.message?.content ?? '')
   }, [])
 
   const init = useCallback(async () => {
@@ -121,15 +148,17 @@ export default function UnlockCameraScreen() {
       message: msgData?.content ?? null,
     })
 
+    const since = new Date(Date.now() - UNLOCK_WINDOW_MS).toISOString()
     const { data: existing } = await supabase
       .from('unlock_records')
       .select('id')
       .eq('user_id', user.id)
       .eq('photo_id', photoId)
+      .gte('unlocked_at', since)
       .maybeSingle()
 
     if (existing) {
-      await fetchFollowUps(photoId)
+      await fetchUnlockEntries(photoId, user.id)
       setStep('unlocked')
       return
     }
@@ -142,9 +171,10 @@ export default function UnlockCameraScreen() {
       loc.coords.latitude, loc.coords.longitude,
       photoData.latitude, photoData.longitude
     ))
+    const gpsAccuracy = loc.coords.accuracy ?? 0
     setDistance(dist)
-    setStep(dist <= UNLOCK_RADIUS_M ? 'ready' : 'tooFar')
-  }, [photoId, fetchFollowUps])
+    setStep(dist - gpsAccuracy <= UNLOCK_RADIUS_M ? 'ready' : 'tooFar')
+  }, [photoId, fetchUnlockEntries])
 
   useEffect(() => { init() }, [init])
 
@@ -180,12 +210,14 @@ export default function UnlockCameraScreen() {
       if (fnError) throw fnError
 
       if (result?.matched) {
-        await supabase.from('unlock_records').insert({
+        await supabase.from('unlock_records').upsert({
           user_id: user.id,
           photo_id: photo.id,
           unlock_image_url: unlockUrl,
-        })
-        setFollowUps([])
+          unlocked_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,photo_id' })
+
+        await fetchUnlockEntries(photo.id, user.id)
         setStep('unlocked')
       } else {
         setStep('failed')
@@ -200,22 +232,24 @@ export default function UnlockCameraScreen() {
   }
 
   const handleSaveFollowUp = async () => {
-    if (!newFollowUp.trim() || !photo || !userId) return
+    if (!newFollowUp.trim() || !photo || !userId || !currentUnlockRecordId) return
     setSaving(true)
     try {
-      const { data, error } = await supabase
-        .from('messages')
-        .insert({
+      const activeEntry = unlockEntries.find(e => e.isActive)
+      const existingMsg = activeEntry?.message ?? null
+
+      if (existingMsg) {
+        await supabase.from('messages').update({ content: newFollowUp.trim() }).eq('id', existingMsg.id)
+      } else {
+        await supabase.from('messages').insert({
           photo_id: photo.id,
           content: newFollowUp.trim(),
           author_id: userId,
           is_original: false,
+          unlock_record_id: currentUnlockRecordId,
         })
-        .select('id, content, created_at')
-        .single()
-      if (error) throw error
-      setFollowUps(prev => [...prev, data as FollowUp])
-      setNewFollowUp('')
+      }
+      await fetchUnlockEntries(photo.id, userId)
     } catch {
       // noop — user can retry
     } finally {
@@ -259,6 +293,9 @@ export default function UnlockCameraScreen() {
 
   // --- Unlocked ---
   if (step === 'unlocked' && photo) {
+    const activeEntry = unlockEntries.find(e => e.isActive)
+    const pastEntries = unlockEntries.filter(e => !e.isActive && e.message)
+
     return (
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -276,44 +313,52 @@ export default function UnlockCameraScreen() {
               <Text style={styles.unlockedMessage}>{photo.message ?? '（メッセージなし）'}</Text>
             </View>
 
-            {followUps.length > 0 && (
+            {pastEntries.length > 0 && (
               <View style={styles.followUpSection}>
-                <Text style={styles.sectionLabel}>追記</Text>
-                {followUps.map(fu => (
-                  <View key={fu.id} style={styles.followUpItem}>
-                    <Text style={styles.followUpContent}>{fu.content}</Text>
+                <Text style={styles.sectionLabel}>過去の訪問</Text>
+                {pastEntries.map(e => (
+                  <View key={e.unlockRecordId} style={styles.followUpItem}>
                     <Text style={styles.followUpDate}>
-                      {new Date(fu.created_at).toLocaleDateString('ja-JP', {
+                      {new Date(e.unlockedAt).toLocaleDateString('ja-JP', {
                         year: 'numeric', month: 'long', day: 'numeric',
                       })}
                     </Text>
+                    <Text style={styles.followUpContent}>{e.message!.content}</Text>
                   </View>
                 ))}
               </View>
             )}
 
-            <View style={styles.appendSection}>
-              <Text style={styles.sectionLabel}>追記する</Text>
-              <TextInput
-                style={styles.appendInput}
-                value={newFollowUp}
-                onChangeText={setNewFollowUp}
-                placeholder="今の気持ちを書き留めておく…"
-                placeholderTextColor={COLORS.subtext}
-                multiline
-                textAlignVertical="top"
-              />
-              <TouchableOpacity
-                style={[styles.primaryButton, (!newFollowUp.trim() || saving) && styles.buttonDisabled]}
-                onPress={handleSaveFollowUp}
-                disabled={!newFollowUp.trim() || saving}
-              >
-                {saving
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.primaryButtonText}>追記を保存する</Text>
-                }
-              </TouchableOpacity>
-            </View>
+            {currentUnlockRecordId && (
+              <View style={styles.appendSection}>
+                <Text style={styles.sectionLabel}>
+                  {activeEntry && new Date(activeEntry.unlockedAt).toLocaleDateString('ja-JP', {
+                    year: 'numeric', month: 'long', day: 'numeric',
+                  })} の記録
+                </Text>
+                <TextInput
+                  style={styles.appendInput}
+                  value={newFollowUp}
+                  onChangeText={setNewFollowUp}
+                  placeholder="今の気持ちを書き留めておく…"
+                  placeholderTextColor={COLORS.subtext}
+                  multiline
+                  textAlignVertical="top"
+                />
+                <TouchableOpacity
+                  style={[styles.primaryButton, (!newFollowUp.trim() || saving) && styles.buttonDisabled]}
+                  onPress={handleSaveFollowUp}
+                  disabled={!newFollowUp.trim() || saving}
+                >
+                  {saving
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={styles.primaryButtonText}>
+                        {activeEntry?.message ? '更新する' : '保存する'}
+                      </Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            )}
 
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
               <Text style={styles.closeButtonText}>閉じる</Text>
@@ -474,8 +519,8 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 4,
   },
-  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 22 },
   followUpDate: { fontSize: 11, color: COLORS.subtext },
+  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 22 },
   appendSection: {
     gap: 10,
     paddingTop: 4,

@@ -13,7 +13,9 @@ import UnlockCameraScreen from '../screens/camera/UnlockCameraScreen'
 import TmpAlbumScreen from '../screens/tmp/TmpAlbumScreen'
 import WriteMessageScreen from '../screens/tmp/WriteMessageScreen'
 import DeskScreen from '../screens/desk/DeskScreen'
+import AlbumListScreen from '../screens/album/AlbumListScreen'
 import BookshelfScreen from '../screens/album/BookshelfScreen'
+import BookshelfDetailScreen from '../screens/album/BookshelfDetailScreen'
 import AlbumDetailScreen from '../screens/album/AlbumDetailScreen'
 import SettingsScreen from '../screens/settings/SettingsScreen'
 
@@ -25,6 +27,7 @@ import type {
   TmpStackParamList,
   DeskStackParamList,
   AlbumStackParamList,
+  BookshelfStackParamList,
   MainTabParamList,
 } from '../types'
 
@@ -34,6 +37,7 @@ const HomeStack = createNativeStackNavigator<HomeStackParamList>()
 const TmpStack = createNativeStackNavigator<TmpStackParamList>()
 const DeskStack = createNativeStackNavigator<DeskStackParamList>()
 const AlbumStack = createNativeStackNavigator<AlbumStackParamList>()
+const BookshelfStack = createNativeStackNavigator<BookshelfStackParamList>()
 const Tab = createBottomTabNavigator<MainTabParamList>()
 
 function CameraNavigator() {
@@ -73,9 +77,23 @@ function DeskNavigator() {
 function AlbumNavigator() {
   return (
     <AlbumStack.Navigator>
-      <AlbumStack.Screen name="Bookshelf" component={BookshelfScreen} options={{ title: '本棚' }} />
+      <AlbumStack.Screen name="AlbumList" component={AlbumListScreen} options={{ title: 'アルバム' }} />
       <AlbumStack.Screen name="AlbumDetail" component={AlbumDetailScreen} options={{ title: 'アルバム' }} />
     </AlbumStack.Navigator>
+  )
+}
+
+function BookshelfNavigator() {
+  return (
+    <BookshelfStack.Navigator>
+      <BookshelfStack.Screen name="Bookshelf" component={BookshelfScreen} options={{ title: '本棚' }} />
+      <BookshelfStack.Screen
+        name="BookshelfDetail"
+        component={BookshelfDetailScreen}
+        options={({ route }) => ({ title: route.params.bookshelfTitle })}
+      />
+      <BookshelfStack.Screen name="AlbumDetail" component={AlbumDetailScreen} options={{ title: 'アルバム' }} />
+    </BookshelfStack.Navigator>
   )
 }
 
@@ -89,7 +107,8 @@ function MainTabs() {
             CameraTab: 'camera',
             TmpTab: 'time',
             DeskTab: 'document-text',
-            AlbumTab: 'book',
+            AlbumTab: 'images',
+            BookshelfTab: 'library',
             SettingsTab: 'settings',
           }
           return <Ionicons name={icons[route.name]} size={size} color={color} />
@@ -101,6 +120,7 @@ function MainTabs() {
       <Tab.Screen name="TmpTab" component={TmpNavigator} options={{ title: '現像待ち', headerShown: false }} />
       <Tab.Screen name="DeskTab" component={DeskNavigator} options={{ title: '机の上', headerShown: false }} />
       <Tab.Screen name="AlbumTab" component={AlbumNavigator} options={{ title: 'アルバム', headerShown: false }} />
+      <Tab.Screen name="BookshelfTab" component={BookshelfNavigator} options={{ title: '本棚', headerShown: false }} />
       <Tab.Screen name="SettingsTab" component={SettingsScreen} options={{ title: '設定' }} />
     </Tab.Navigator>
   )
