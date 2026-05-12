@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import {
   View,
   TouchableOpacity,
@@ -7,6 +7,9 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { TAB_BAR_HEIGHT, FAB_SIZE } from '../../lib/scale'
+import { useCameraContext } from '../../contexts/CameraContext'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as Location from 'expo-location'
 import * as MediaLibrary from 'expo-media-library'
@@ -21,13 +24,28 @@ type Props = {
   navigation: NativeStackNavigationProp<CameraStackParamList, 'Capture'>
 }
 
+const SHUTTER_SIZE = 72
+const SHUTTER_OFFSET = -135
+
 export default function CaptureScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets()
+  const { shootRef } = useCameraContext()
   const cameraRef = useRef<CameraView>(null)
   const [capturing, setCapturing] = useState(false)
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const [locationPermission, requestLocationPermission] = Location.useForegroundPermissions()
   const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions()
+
+  const controlsBottom = TAB_BAR_HEIGHT + insets.bottom - SHUTTER_SIZE / 2 + SHUTTER_OFFSET
+
+  // takePicture の最新版を常にrefに保持し、FABから呼べるようにする
+  const takePictureRef = useRef<(() => Promise<void>) | null>(null)
+
+  useEffect(() => {
+    shootRef.current = () => { takePictureRef.current?.() }
+    return () => { shootRef.current = null }
+  }, [shootRef])
 
   if (!cameraPermission) {
     return <View style={styles.container} />
@@ -106,10 +124,13 @@ export default function CaptureScreen({ navigation }: Props) {
     }
   }
 
+  // 毎レンダーで最新のtakePictureをrefに同期（FABから常に最新版が呼ばれる）
+  takePictureRef.current = takePicture
+
   return (
     <View style={styles.container}>
       <CameraView style={styles.camera} facing="back" ref={cameraRef} />
-      <View style={styles.controls}>
+      <View style={[styles.controls, { bottom: controlsBottom }]}>
         <TouchableOpacity
           style={[styles.shutter, capturing && styles.shutterDisabled]}
           onPress={takePicture}
@@ -135,15 +156,14 @@ const styles = StyleSheet.create({
   },
   controls: {
     position: 'absolute',
-    bottom: 48,
     left: 0,
     right: 0,
     alignItems: 'center',
   },
   shutter: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: SHUTTER_SIZE,
+    height: SHUTTER_SIZE,
+    borderRadius: SHUTTER_SIZE / 2,
     borderWidth: 4,
     borderColor: '#fff',
     alignItems: 'center',
@@ -153,9 +173,9 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   shutterInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: SHUTTER_SIZE - 16,
+    height: SHUTTER_SIZE - 16,
+    borderRadius: (SHUTTER_SIZE - 16) / 2,
     backgroundColor: '#fff',
   },
   permissionContainer: {

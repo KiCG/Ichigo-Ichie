@@ -11,11 +11,40 @@ import {
   Pressable,
   Dimensions,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import MapView, { Marker, Callout, Region } from 'react-native-maps'
 import * as Location from 'expo-location'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
 import type { HomeStackParamList } from '../../types'
+
+const parchmentRing = require('../../../assets/home/home_assets/parchment.png')
+const sealIntact = require('../../../assets/home/home_assets/seal_intact.png')
+
+const ANTIQUE_MAP_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#f2e8d5' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#4a3728' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#f2e8d5' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#b8a898' }] },
+  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#9e8e7e' }] },
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#e8dcc8' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#ede4d2' }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#ddd3be' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#7a6a5a' }] },
+  { featureType: 'poi.park', elementType: 'geometry.fill', stylers: [{ color: '#c8d4b0' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6a8050' }] },
+  { featureType: 'poi', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ddd0b8' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#c8b89a' }] },
+  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#d4c4a0' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#c8a878' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#b09060' }] },
+  { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#7a6858' }] },
+  { featureType: 'transit.line', elementType: 'geometry', stylers: [{ color: '#c8b898' }] },
+  { featureType: 'transit.station', elementType: 'geometry', stylers: [{ color: '#ddd3be' }] },
+  { featureType: 'water', elementType: 'geometry.fill', stylers: [{ color: '#a8c4be' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#6a8880' }] },
+]
 
 const COLORS = {
   background: '#FAFAF7',
@@ -57,6 +86,7 @@ function formatDistance(km: number): string {
 }
 
 export default function NearbyScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets()
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null)
   const [photos, setPhotos] = useState<NearbyPhoto[]>([])
   const [loading, setLoading] = useState(true)
@@ -135,14 +165,23 @@ export default function NearbyScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      <MapView style={styles.map} initialRegion={region} showsUserLocation showsMyLocationButton>
+      <MapView
+        style={styles.map}
+        initialRegion={region}
+        showsUserLocation
+        showsMyLocationButton
+        customMapStyle={ANTIQUE_MAP_STYLE}
+      >
         {photos.map(photo => (
           <Marker
             key={photo.id}
             coordinate={{ latitude: photo.latitude, longitude: photo.longitude }}
+            anchor={{ x: 0.5, y: 1 }}
           >
             <View style={styles.pin}>
-              <Image source={{ uri: photo.image_url }} style={styles.pinImage} resizeMode="cover" />
+              <Image source={{ uri: photo.image_url }} style={styles.pinPhoto} resizeMode="cover" />
+              <Image source={parchmentRing} style={styles.pinRing} resizeMode="contain" />
+              <Image source={sealIntact} style={styles.pinSeal} resizeMode="contain" />
             </View>
             <Callout onPress={() => handleSelectPhoto(photo.id)}>
               <View style={styles.callout}>
@@ -155,7 +194,7 @@ export default function NearbyScreen({ navigation }: Props) {
       </MapView>
 
       <TouchableOpacity
-        style={styles.badge}
+        style={[styles.badge, { top: insets.top + 12 }]}
         onPress={() => photos.length > 0 && setListVisible(true)}
         activeOpacity={photos.length > 0 ? 0.7 : 1}
       >
@@ -227,21 +266,39 @@ const styles = StyleSheet.create({
   },
   map: { flex: 1 },
   pin: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: COLORS.accent,
-    overflow: 'hidden',
-    backgroundColor: COLORS.border,
+    width: 64,
+    height: 64,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  pinImage: { width: '100%', height: '100%' },
+  pinPhoto: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    right: 8,
+    bottom: 8,
+    borderRadius: 26,
+  },
+  pinRing: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 64,
+    height: 64,
+  },
+  pinSeal: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 26,
+    height: 26,
+  },
   callout: { width: 180, alignItems: 'center', paddingBottom: 4 },
   calloutImage: { width: 168, height: 110, borderRadius: 6, marginBottom: 8 },
   calloutButton: { fontSize: 13, color: COLORS.accent, fontWeight: '600' },
   badge: {
     position: 'absolute',
-    top: 16,
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',

@@ -16,7 +16,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../../lib/supabase'
-import type { BookshelfStackParamList } from '../../types'
+import type { CollectionStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -27,7 +27,7 @@ const COLORS = {
 }
 
 type Props = {
-  navigation: NativeStackNavigationProp<BookshelfStackParamList, 'Bookshelf'>
+  navigation: NativeStackNavigationProp<CollectionStackParamList, 'CollectionHome'>
 }
 
 type BookshelfCard = {

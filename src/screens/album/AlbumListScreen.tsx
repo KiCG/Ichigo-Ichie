@@ -21,7 +21,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import QRCode from 'react-native-qrcode-svg'
 import { supabase } from '../../lib/supabase'
-import type { AlbumStackParamList } from '../../types'
+import type { CollectionStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -36,7 +36,7 @@ const QR_SIZE = Math.min(SCREEN_WIDTH - 120, 220)
 const SCANNER_SIZE = SCREEN_WIDTH - 96
 
 type Props = {
-  navigation: NativeStackNavigationProp<AlbumStackParamList, 'AlbumList'>
+  navigation: NativeStackNavigationProp<CollectionStackParamList, 'CollectionHome'>
 }
 
 type AlbumCard = {

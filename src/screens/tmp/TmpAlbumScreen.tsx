@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Dimensions,
+  useWindowDimensions,
   RefreshControl,
   Alert,
 } from 'react-native'
@@ -16,7 +16,7 @@ import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
 import { deletePhoto } from '../../lib/photoDelete'
-import type { TmpStackParamList } from '../../types'
+import type { CollectionStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -27,9 +27,7 @@ const COLORS = {
   warning: '#E67E22',
 }
 
-const ITEM_SIZE = (Dimensions.get('window').width - 48) / 2
-
-type Nav = NativeStackNavigationProp<TmpStackParamList, 'TmpAlbum'>
+type Nav = NativeStackNavigationProp<CollectionStackParamList, 'CollectionHome'>
 
 type TmpPhoto = {
   id: string
@@ -43,6 +41,8 @@ function daysRemaining(takenAt: string): number {
 }
 
 export default function TmpAlbumScreen() {
+  const { width } = useWindowDimensions()
+  const itemSize = (width - 48) / 2
   const navigation = useNavigation<Nav>()
   const [photos, setPhotos] = useState<TmpPhoto[]>([])
   const [loading, setLoading] = useState(true)
@@ -139,12 +139,12 @@ export default function TmpAlbumScreen() {
             const days = daysRemaining(item.taken_at)
             return (
               <TouchableOpacity
-                style={styles.card}
+                style={[styles.card, { width: itemSize }]}
                 onPress={() => navigation.navigate('WriteMessage', { photoId: item.id, imageUrl: item.image_url })}
                 onLongPress={() => handleDelete(item)}
                 activeOpacity={0.85}
               >
-                <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
+                <Image source={{ uri: item.image_url }} style={[styles.thumbnail, { height: itemSize }]} resizeMode="cover" />
                 <View style={[styles.badge, days <= 1 && styles.badgeUrgent]}>
                   <Text style={styles.badgeText}>残り{days}日</Text>
                 </View>
@@ -168,14 +168,13 @@ const styles = StyleSheet.create({
   grid: { padding: 16 },
   row: { justifyContent: 'space-between', marginBottom: 16 },
   card: {
-    width: ITEM_SIZE,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  thumbnail: { width: '100%', height: ITEM_SIZE },
+  thumbnail: { width: '100%' },
   badge: {
     position: 'absolute',
     top: 8,

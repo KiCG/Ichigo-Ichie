@@ -14,7 +14,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../../lib/supabase'
-import type { BookshelfStackParamList } from '../../types'
+import type { CollectionStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -31,8 +31,8 @@ type AlbumCard = {
   photoCount: number
 }
 
-type Nav = NativeStackNavigationProp<BookshelfStackParamList, 'BookshelfDetail'>
-type Route = RouteProp<BookshelfStackParamList, 'BookshelfDetail'>
+type Nav = NativeStackNavigationProp<CollectionStackParamList, 'BookshelfDetail'>
+type Route = RouteProp<CollectionStackParamList, 'BookshelfDetail'>
 
 export default function BookshelfDetailScreen() {
   const navigation = useNavigation<Nav>()

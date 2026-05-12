@@ -16,7 +16,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import * as MediaLibrary from 'expo-media-library'
 import { supabase } from '../../lib/supabase'
 import { getCameraRollPreference } from '../../lib/cameraRollPreference'
-import type { Album, TmpStackParamList } from '../../types'
+import type { Album, CollectionStackParamList } from '../../types'
 
 const COLORS = {
   background: '#FAFAF7',
@@ -30,8 +30,8 @@ const COLORS = {
   deskBorder: '#7AAB7A',
 }
 
-type WriteMessageRoute = RouteProp<TmpStackParamList, 'WriteMessage'>
-type WriteMessageNav = NativeStackNavigationProp<TmpStackParamList, 'WriteMessage'>
+type WriteMessageRoute = RouteProp<CollectionStackParamList, 'WriteMessage'>
+type WriteMessageNav = NativeStackNavigationProp<CollectionStackParamList, 'WriteMessage'>
 
 export default function WriteMessageScreen() {
   const route = useRoute<WriteMessageRoute>()

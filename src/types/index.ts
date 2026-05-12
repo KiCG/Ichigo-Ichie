@@ -100,12 +100,16 @@ export type BookshelfStackParamList = {
   AlbumDetail: { albumId: string; albumTitle: string }
 }
 
+export type CollectionStackParamList = {
+  CollectionHome: undefined
+  WriteMessage: { photoId: string; imageUrl: string }
+  AlbumDetail: { albumId: string; albumTitle: string }
+  BookshelfDetail: { bookshelfId: string; bookshelfTitle: string }
+}
+
 export type MainTabParamList = {
   HomeTab: undefined
+  CollectionTab: undefined
   CameraTab: undefined
-  TmpTab: undefined
-  DeskTab: undefined
-  AlbumTab: undefined
-  BookshelfTab: undefined
   SettingsTab: undefined
 }
