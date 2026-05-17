@@ -220,7 +220,7 @@ export default function NearbyScreen({ navigation }: Props) {
             coordinate={{ latitude: userLocation.latitude, longitude: userLocation.longitude }}
             anchor={{ x: 0.5, y: 0.5 }}
             tracksViewChanges={false}
-            zIndex={0}
+            zIndex={999}
           >
             <View style={styles.userDot} />
           </Marker>
