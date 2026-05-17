@@ -28,6 +28,9 @@ type AlbumPreview = {
   id: string; title: string; coverUrl: string | null; photoCount: number
   bookshelfId: string | null; bookshelfTitle: string | null
 }
+type SharedAlbumPreview = {
+  id: string; title: string; coverUrl: string | null; photoCount: number; shareId: string
+}
 type ShelfPreview = { id: string; title: string; albumCount: number; coverUrl: string | null }
 type ShelfOption = { id: string; title: string }
 
@@ -73,6 +76,7 @@ export default function MemoriesScreen() {
   const [deskPhotos, setDeskPhotos] = useState<DeskPhoto[]>([])
   const [deskCount, setDeskCount] = useState(0)
   const [albums, setAlbums] = useState<AlbumPreview[]>([])
+  const [sharedAlbums, setSharedAlbums] = useState<SharedAlbumPreview[]>([])
   const [shelves, setShelves] = useState<ShelfPreview[]>([])
   const [allShelves, setAllShelves] = useState<ShelfOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -94,6 +98,7 @@ export default function MemoriesScreen() {
       { data: deskAlbumData },
       { data: albumData },
       { data: shelfData },
+      { data: shareData },
     ] = await Promise.all([
       supabase
         .from('photos')
@@ -126,6 +131,10 @@ export default function MemoriesScreen() {
         .select('id, title')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false }),
+      supabase
+        .from('album_shares')
+        .select('id, album_id')
+        .eq('shared_to_user_id', user.id),
     ])
 
     setTmpPhotos(tmpData ?? [])
@@ -217,6 +226,39 @@ export default function MemoriesScreen() {
       albumCount: shelfStats[s.id]?.count ?? 0,
       coverUrl: shelfStats[s.id]?.coverUrl ?? null,
     })))
+
+    // Shared albums received by the user
+    if (shareData?.length) {
+      const shareMap: Record<string, string> = {}
+      const sharedAlbumIds: string[] = []
+      for (const s of shareData) {
+        shareMap[s.album_id] = s.id
+        sharedAlbumIds.push(s.album_id)
+      }
+      const [{ data: saData }, { data: spData }] = await Promise.all([
+        supabase.from('albums').select('id, title').in('id', sharedAlbumIds),
+        supabase
+          .from('photos')
+          .select('album_id, image_url')
+          .in('album_id', sharedAlbumIds)
+          .order('taken_at', { ascending: true }),
+      ])
+      const sCoverMap: Record<string, string | null> = {}
+      const sCountMap: Record<string, number> = {}
+      for (const p of spData ?? []) {
+        if (!sCoverMap[p.album_id]) sCoverMap[p.album_id] = p.image_url
+        sCountMap[p.album_id] = (sCountMap[p.album_id] ?? 0) + 1
+      }
+      setSharedAlbums((saData ?? []).map(a => ({
+        id: a.id,
+        title: a.title,
+        coverUrl: sCoverMap[a.id] ?? null,
+        photoCount: sCountMap[a.id] ?? 0,
+        shareId: shareMap[a.id],
+      })))
+    } else {
+      setSharedAlbums([])
+    }
   }, [])
 
   const isFirstLoad = useRef(true)
@@ -307,6 +349,35 @@ export default function MemoriesScreen() {
     options.push({ text: 'アルバムを削除', style: 'destructive', onPress: () => handleDeleteAlbum(album) })
     options.push({ text: 'キャンセル', style: 'cancel' })
     Alert.alert(album.title, '', options)
+  }
+
+  const handleSharedAlbumLongPress = (album: SharedAlbumPreview) => {
+    Alert.alert(album.title, '', [
+      {
+        text: '共有を外す',
+        style: 'destructive',
+        onPress: () => Alert.alert(
+          '共有を外しますか？',
+          `「${album.title}」の共有を解除します。`,
+          [
+            { text: 'キャンセル', style: 'cancel' },
+            {
+              text: '共有を外す',
+              style: 'destructive',
+              onPress: async () => {
+                try {
+                  await supabase.from('album_shares').delete().eq('id', album.shareId)
+                  setSharedAlbums(prev => prev.filter(a => a.id !== album.id))
+                } catch {
+                  Alert.alert('エラー', '操作に失敗しました。もう一度お試しください。')
+                }
+              },
+            },
+          ]
+        ),
+      },
+      { text: 'キャンセル', style: 'cancel' },
+    ])
   }
 
   const handleShelfLongPress = (shelf: ShelfPreview) => {
@@ -442,6 +513,40 @@ export default function MemoriesScreen() {
             </TouchableOpacity>
           ))}
         </View>
+      )}
+
+      {/* 共有アルバム */}
+      {sharedAlbums.length > 0 && (
+        <>
+          <SectionHeader
+            title="共有アルバム"
+            onAll={() => navigation.navigate('AlbumList')}
+            hasMore={sharedAlbums.length > 0}
+            count={sharedAlbums.length}
+          />
+          <View style={styles.vList}>
+            {sharedAlbums.slice(0, ALBUM_INITIAL).map(a => (
+              <TouchableOpacity
+                key={a.id}
+                style={styles.albumRow}
+                onPress={() => navigation.navigate('AlbumDetail', { albumId: a.id, albumTitle: a.title })}
+                onLongPress={() => handleSharedAlbumLongPress(a)}
+                activeOpacity={0.7}
+              >
+                {a.coverUrl ? (
+                  <Image source={{ uri: a.coverUrl }} style={styles.albumCover} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.albumCover, styles.coverPlaceholder]} />
+                )}
+                <View style={styles.albumInfo}>
+                  <Text style={styles.albumTitle} numberOfLines={1}>{a.title}</Text>
+                  <Text style={styles.albumMeta}>{a.photoCount}枚 · 共有</Text>
+                </View>
+                <Text style={styles.chevron}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
       )}
 
       {/* 本棚 */}
