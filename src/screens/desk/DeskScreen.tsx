@@ -1,10 +1,18 @@
 import React, { useState, useCallback } from 'react'
 import { View, ActivityIndicator, StyleSheet } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
+import { RouteProp } from '@react-navigation/native'
 import { supabase } from '../../lib/supabase'
 import AlbumDetailView from '../../components/AlbumDetailView'
+import { COLORS } from '../../theme'
+import type { MemoriesStackParamList } from '../../types'
 
-export default function DeskScreen() {
+type Props = {
+  route: RouteProp<MemoriesStackParamList, 'Desk'>
+}
+
+export default function DeskScreen({ route }: Props) {
+  const initialPhotoId = route.params?.initialPhotoId
   const [deskAlbumId, setDeskAlbumId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -33,7 +41,7 @@ export default function DeskScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color="#8B7355" />
+        <ActivityIndicator color={COLORS.accent} />
       </View>
     )
   }
@@ -45,10 +53,11 @@ export default function DeskScreen() {
       albumId={deskAlbumId}
       emptyText="机の上には何も置かれていません"
       showMoveAction
+      initialPhotoId={initialPhotoId}
     />
   )
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.paper },
 })

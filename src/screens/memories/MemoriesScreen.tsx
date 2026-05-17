@@ -472,7 +472,7 @@ export default function MemoriesScreen() {
             <TouchableOpacity
               key={p.id}
               style={styles.deskCard}
-              onPress={() => navigation.navigate('Desk')}
+              onPress={() => navigation.navigate('Desk', { initialPhotoId: p.id })}
               activeOpacity={0.85}
             >
               <Image source={{ uri: p.image_url }} style={styles.deskThumb} resizeMode="cover" />

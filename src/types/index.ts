@@ -78,34 +78,23 @@ export type HomeStackParamList = {
 
 export type CameraStackParamList = {
   Capture: undefined
-}
-
-export type TmpStackParamList = {
-  TmpAlbum: undefined
   WriteMessage: { photoId: string; imageUrl: string }
 }
 
-export type DeskStackParamList = {
-  Desk: undefined
-}
-
-export type AlbumStackParamList = {
+export type MemoriesStackParamList = {
+  Memories: undefined
+  TmpAll: undefined
+  Desk: { initialPhotoId?: string } | undefined
   AlbumList: undefined
   AlbumDetail: { albumId: string; albumTitle: string }
-}
-
-export type BookshelfStackParamList = {
   Bookshelf: undefined
   BookshelfDetail: { bookshelfId: string; bookshelfTitle: string }
-  AlbumDetail: { albumId: string; albumTitle: string }
+  WriteMessage: { photoId: string; imageUrl: string }
 }
 
 export type MainTabParamList = {
   HomeTab: undefined
+  MemoriesTab: undefined
   CameraTab: undefined
-  TmpTab: undefined
-  DeskTab: undefined
-  AlbumTab: undefined
-  BookshelfTab: undefined
   SettingsTab: undefined
 }

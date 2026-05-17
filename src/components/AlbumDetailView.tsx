@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
   Text,
-  FlatList,
+  ScrollView,
   Image,
   TouchableOpacity,
   Pressable,
@@ -12,29 +12,21 @@ import {
   Dimensions,
   RefreshControl,
   Modal,
-  ScrollView,
   TextInput,
-  KeyboardAvoidingView,
-  Platform,
   Alert,
 } from 'react-native'
+// TextInput は album picker の newAlbumInput で引き続き使用
+import { Ionicons } from '@expo/vector-icons'
+import TextEditorModal from './TextEditorModal'
 import { supabase } from '../lib/supabase'
 import { deletePhoto } from '../lib/photoDelete'
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../theme'
 
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-  followUpBg: '#F0EDE8',
-  sharedBg: '#EAF0F0',
-  danger: '#C0392B',
-}
-
-const ITEM_SIZE = (Dimensions.get('window').width - 48) / 2
+const SCREEN_WIDTH = Dimensions.get('window').width
+const SCREEN_HEIGHT = Dimensions.get('window').height
 const UNLOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 const FRESH_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+const COLLAPSE_THRESHOLD = 60
 
 type MessageEntry = {
   id: string
@@ -49,6 +41,7 @@ type UnlockEntry = {
   unlockedAt: string
   isActive: boolean
   message: MessageEntry | null
+  memoryImageUrl: string | null
 }
 
 type SharedEntry = {
@@ -62,7 +55,9 @@ type PhotoItem = {
   image_url: string
   taken_at: string
   user_id: string
+  unlock_at: string | null
   originalMessage: MessageEntry | null
+  isSealed: boolean
   isUnlocked: boolean
   isFresh: boolean
   unlockEntries: UnlockEntry[]
@@ -74,9 +69,18 @@ type Props = {
   albumId: string
   emptyText?: string
   showMoveAction?: boolean
+  initialPhotoId?: string
 }
 
-export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: Props) {
+function formatDate(d: string): string {
+  return new Date(d).toLocaleDateString('ja-JP', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
+}
+
+export default function AlbumDetailView({ albumId, emptyText, showMoveAction, initialPhotoId }: Props) {
   const [photos, setPhotos] = useState<PhotoItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -88,6 +92,18 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
   const [originalEditText, setOriginalEditText] = useState('')
   const [originalSaving, setOriginalSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [editorTarget, setEditorTarget] = useState<'original' | 'followup' | null>(null)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [showPhotoFull, setShowPhotoFull] = useState(false)
+
+  const toggleExpanded = (id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const [showAlbumPicker, setShowAlbumPicker] = useState(false)
   const [availableAlbums, setAvailableAlbums] = useState<{ id: string; title: string }[]>([])
@@ -103,7 +119,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
 
     const { data: photoData } = await supabase
       .from('photos')
-      .select('id, image_url, taken_at, user_id')
+      .select('id, image_url, taken_at, user_id, unlock_at')
       .eq('album_id', albumId)
       .order('taken_at', { ascending: false })
 
@@ -115,7 +131,6 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
 
     const photoIds = photoData.map(p => p.id)
 
-    // Determine if this is a shared album and fetch settings
     const { data: myShare } = await supabase
       .from('album_shares')
       .select('can_message')
@@ -125,10 +140,8 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
 
     let canMsgFlag = false
     if (myShare) {
-      // Recipient view
       canMsgFlag = myShare.can_message
     } else {
-      // Owner view — check if any active share has can_message = true
       const { data: ownerShare } = await supabase
         .from('album_shares')
         .select('id')
@@ -142,7 +155,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
 
     const unlockBase = supabase
       .from('unlock_records')
-      .select('id, photo_id, unlocked_at, user_id')
+      .select('id, photo_id, unlocked_at, user_id, memory_image_url')
       .in('photo_id', photoIds)
       .order('unlocked_at', { ascending: true })
 
@@ -185,6 +198,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
           unlockedAt: u.unlocked_at,
           isActive: now - new Date(u.unlocked_at).getTime() <= UNLOCK_WINDOW_MS,
           message: msg,
+          memoryImageUrl: u.memory_image_url ?? null,
         })
       } else {
         if (!othersEntriesMap[u.photo_id]) othersEntriesMap[u.photo_id] = []
@@ -196,26 +210,42 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
       }
     }
 
-    setPhotos(photoData.map(p => {
+    const processed = photoData.map(p => {
       const entries = ownEntriesMap[p.id] ?? []
       const activeEntry = entries.find(e => e.isActive) ?? null
       const isFresh = p.user_id === user.id && now - new Date(p.taken_at).getTime() <= FRESH_WINDOW_MS
+      const isSealed = !!p.unlock_at && new Date(p.unlock_at).getTime() > now
       return {
         id: p.id,
         image_url: p.image_url,
         taken_at: p.taken_at,
         user_id: p.user_id,
+        unlock_at: p.unlock_at ?? null,
         originalMessage: originalMsgMap[p.id] ?? null,
-        isUnlocked: !!activeEntry || isFresh,
+        isSealed,
+        isUnlocked: !isSealed && (!!activeEntry || isFresh),
         isFresh,
         unlockEntries: entries,
         currentUnlockRecordId: activeEntry?.unlockRecordId ?? null,
         othersEntries: othersEntriesMap[p.id] ?? [],
       }
-    }))
-  }, [albumId])
+    })
+    setPhotos(processed)
+
+    if (initialPhotoId && !autoSelectDone.current) {
+      const target = processed.find(p => p.id === initialPhotoId)
+      if (target) {
+        autoSelectDone.current = true
+        const activeEntry = target.unlockEntries.find(e => e.isActive)
+        setSelected(target)
+        setAppendText(activeEntry?.message?.content ?? '')
+        setOriginalEditText(target.originalMessage?.content ?? '')
+      }
+    }
+  }, [albumId, initialPhotoId])
 
   const isFirstLoad = useRef(true)
+  const autoSelectDone = useRef(false)
 
   useFocusEffect(
     useCallback(() => {
@@ -247,6 +277,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
     setShowAlbumPicker(false)
     setNewAlbumName('')
     setShowNewAlbum(false)
+    setShowPhotoFull(false)
   }
 
   const handleSaveOriginal = async () => {
@@ -414,32 +445,72 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
           </Text>
         </View>
       ) : (
-        <FlatList
-          data={photos}
-          keyExtractor={item => item.id}
-          numColumns={2}
-          contentContainerStyle={styles.grid}
-          columnWrapperStyle={styles.row}
+        <ScrollView
+          contentContainerStyle={styles.journal}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.card} onPress={() => handleSelectPhoto(item)} activeOpacity={0.85}>
-              <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
-              {item.isUnlocked ? (
-                item.originalMessage ? (
-                  <View style={styles.cardBody}>
-                    <Text style={styles.messagePreview} numberOfLines={2}>{item.originalMessage.content}</Text>
+        >
+          {photos.map((item, idx) => (
+            <View key={item.id} style={[styles.entry, idx === 0 && styles.entryFirst]}>
+              <Text style={styles.entryDate}>{formatDate(item.taken_at)}</Text>
+
+              <TouchableOpacity
+                onPress={() => handleSelectPhoto(item)}
+                activeOpacity={0.92}
+              >
+                <Image source={{ uri: item.image_url }} style={styles.entryImage} resizeMode="cover" />
+                {item.isSealed && (
+                  <View style={styles.lockOverlay}>
+                    <Ionicons name="lock-closed" size={20} color={COLORS.paper} style={{ marginBottom: 6 }} />
+                    <Text style={styles.lockText}>
+                      {new Date(item.unlock_at!).toLocaleDateString('ja-JP', { month: 'long', day: 'numeric' })}
+                    </Text>
                   </View>
-                ) : null
-              ) : (
-                <View style={styles.cardLock}>
-                  <Text style={styles.lockIcon}>🔒</Text>
-                </View>
+                )}
+                {!item.isSealed && !item.isUnlocked && (
+                  <View style={styles.lockOverlay}>
+                    <Text style={styles.lockText}>未解錠</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              {item.isUnlocked && item.originalMessage && (() => {
+                const content = item.originalMessage.content
+                const isLong = content.length > COLLAPSE_THRESHOLD
+                const isExpanded = expandedIds.has(item.id)
+                return (
+                  <>
+                    <View style={styles.messageWrap}>
+                      <Text style={styles.quoteOpen}>「</Text>
+                      <Text style={styles.messageBody} numberOfLines={isLong && !isExpanded ? 4 : undefined}>
+                        {content}
+                      </Text>
+                      <Text style={styles.quoteClose}>」</Text>
+                    </View>
+                    {isLong && (
+                      <TouchableOpacity onPress={() => toggleExpanded(item.id)} activeOpacity={0.7} style={styles.expandBtn}>
+                        <Text style={styles.expandBtnText}>{isExpanded ? '閉じる' : '続きを読む'}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
+                )
+              })()}
+
+              {item.isSealed && (
+                <Text style={styles.lockedHint}>
+                  {new Date(item.unlock_at!).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })}に解錠できます
+                </Text>
               )}
-            </TouchableOpacity>
-          )}
-        />
+
+              {!item.isSealed && !item.isUnlocked && (
+                <Text style={styles.lockedHint}>
+                  この場所へ戻り、同じ風景を撮影するとメッセージが現れます
+                </Text>
+              )}
+            </View>
+          ))}
+        </ScrollView>
       )}
 
       <Modal
@@ -448,15 +519,13 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
         transparent
         onRequestClose={handleCloseModal}
       >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
+        <View style={{ flex: 1 }}>
           <Pressable
-            style={styles.overlay}
+            style={[StyleSheet.absoluteFillObject, styles.backdrop]}
             onPress={showAlbumPicker ? () => setShowAlbumPicker(false) : handleCloseModal}
-          >
-            <Pressable style={styles.modal}>
+          />
+          <View style={styles.overlayCenter} pointerEvents="box-none">
+            <View style={styles.modal}>
               {selected && (
                 showAlbumPicker ? (
                   <>
@@ -467,7 +536,7 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                       </TouchableOpacity>
                     </View>
                     {loadingAlbums ? (
-                      <ActivityIndicator color={COLORS.accent} style={{ marginVertical: 24 }} />
+                      <ActivityIndicator color={COLORS.accent} style={{ marginVertical: SPACING.xxl }} />
                     ) : (
                       <ScrollView style={styles.pickerScroll} keyboardShouldPersistTaps="handled">
                         {availableAlbums.map(album => (
@@ -492,19 +561,19 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                             <TextInput
                               style={styles.newAlbumInput}
                               placeholder="アルバム名"
-                              placeholderTextColor={COLORS.subtext}
+                              placeholderTextColor={COLORS.inkSoft}
                               value={newAlbumName}
                               onChangeText={setNewAlbumName}
                               autoFocus
                             />
                             <TouchableOpacity
-                              style={[styles.newAlbumConfirm, (!newAlbumName.trim() || moving) && styles.buttonDisabled]}
+                              style={[styles.primaryBtn, (!newAlbumName.trim() || moving) && styles.btnDisabled]}
                               onPress={() => handleMoveToAlbum(null)}
                               disabled={!newAlbumName.trim() || moving}
                             >
                               {moving
-                                ? <ActivityIndicator color="#fff" size="small" />
-                                : <Text style={styles.newAlbumConfirmText}>作成して移動</Text>
+                                ? <ActivityIndicator color={COLORS.white} size="small" />
+                                : <Text style={styles.primaryBtnText}>作成して移動</Text>
                               }
                             </TouchableOpacity>
                           </View>
@@ -513,37 +582,39 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                     )}
                   </>
                 ) : (
-                  <>
-                    <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
+                  <ScrollView bounces={false} keyboardShouldPersistTaps="handled">
+                    <TouchableOpacity activeOpacity={0.9} onPress={() => setShowPhotoFull(true)}>
+                      <Image source={{ uri: selected.image_url }} style={styles.modalImage} resizeMode="cover" />
+                    </TouchableOpacity>
 
                     {selected.isUnlocked ? (
-                      <ScrollView
-                        style={styles.modalScrollContent}
-                        bounces={false}
-                        keyboardShouldPersistTaps="handled"
-                      >
-                        {/* Original message */}
+                      <>
                         <View style={styles.modalSection}>
                           <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
                           {selected.isFresh ? (
                             <>
-                              <TextInput
-                                style={styles.appendInput}
-                                value={originalEditText}
-                                onChangeText={setOriginalEditText}
-                                placeholder="メッセージを書く…"
-                                placeholderTextColor={COLORS.subtext}
-                                multiline
-                                textAlignVertical="top"
-                              />
                               <TouchableOpacity
-                                style={[styles.appendButton, (!originalEditText.trim() || originalSaving) && styles.buttonDisabled]}
+                                style={styles.textTapArea}
+                                onPress={() => setEditorTarget('original')}
+                                activeOpacity={0.7}
+                              >
+                                {originalEditText ? (
+                                  <Text style={styles.textPreview}>{originalEditText}</Text>
+                                ) : (
+                                  <Text style={styles.textPlaceholder}>メッセージを書く…</Text>
+                                )}
+                                <View style={styles.pencilWrap}>
+                                  <Ionicons name="pencil-outline" size={13} color={COLORS.inkSoft} />
+                                </View>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.primaryBtn, (!originalEditText.trim() || originalSaving) && styles.btnDisabled]}
                                 onPress={handleSaveOriginal}
                                 disabled={!originalEditText.trim() || originalSaving}
                               >
                                 {originalSaving
-                                  ? <ActivityIndicator color="#fff" size="small" />
-                                  : <Text style={styles.appendButtonText}>更新する</Text>
+                                  ? <ActivityIndicator color={COLORS.white} size="small" />
+                                  : <Text style={styles.primaryBtnText}>更新する</Text>
                                 }
                               </TouchableOpacity>
                             </>
@@ -554,53 +625,60 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                           )}
                         </View>
 
-                        {/* Own past visits */}
-                        {selected.unlockEntries.filter(e => !e.isActive && e.message).length > 0 && (
+                        {selected.unlockEntries.filter(e => !e.isActive && (e.message || e.memoryImageUrl)).length > 0 && (
                           <View style={styles.modalSection}>
                             <Text style={styles.sectionLabel}>過去の訪問</Text>
                             {selected.unlockEntries
-                              .filter(e => !e.isActive && e.message)
+                              .filter(e => !e.isActive && (e.message || e.memoryImageUrl))
                               .map(e => (
-                                <View key={e.unlockRecordId} style={styles.followUpItem}>
-                                  <Text style={styles.followUpDate}>
-                                    {new Date(e.unlockedAt).toLocaleDateString('ja-JP', {
-                                      year: 'numeric', month: 'long', day: 'numeric',
-                                    })}
-                                  </Text>
-                                  <Text style={styles.followUpContent}>{e.message!.content}</Text>
+                                <View key={e.unlockRecordId} style={styles.visitItem}>
+                                  <Text style={styles.visitDate}>{formatDate(e.unlockedAt)}</Text>
+                                  {e.memoryImageUrl && (
+                                    <Image source={{ uri: e.memoryImageUrl }} style={styles.visitMemoryThumb} resizeMode="cover" />
+                                  )}
+                                  {e.message && (
+                                    <Text style={styles.visitContent}>{e.message.content}</Text>
+                                  )}
                                 </View>
                               ))
                             }
                           </View>
                         )}
 
-                        {/* Own active visit */}
                         {selected.currentUnlockRecordId && (
-                          <View style={styles.appendSection}>
+                          <View style={[styles.modalSection, styles.modalSectionDivider]}>
                             <Text style={styles.sectionLabel}>
-                              {new Date(
-                                selected.unlockEntries.find(e => e.isActive)?.unlockedAt ?? ''
-                              ).toLocaleDateString('ja-JP', {
-                                year: 'numeric', month: 'long', day: 'numeric',
-                              })} の記録
+                              {formatDate(selected.unlockEntries.find(e => e.isActive)?.unlockedAt ?? '')} の記録
                             </Text>
-                            <TextInput
-                              style={styles.appendInput}
-                              value={appendText}
-                              onChangeText={setAppendText}
-                              placeholder="今の気持ちを書き留めておく…"
-                              placeholderTextColor={COLORS.subtext}
-                              multiline
-                              textAlignVertical="top"
-                            />
+                            {selected.unlockEntries.find(e => e.isActive)?.memoryImageUrl && (
+                              <Image
+                                source={{ uri: selected.unlockEntries.find(e => e.isActive)!.memoryImageUrl! }}
+                                style={styles.visitMemoryThumb}
+                                resizeMode="cover"
+                              />
+                            )}
                             <TouchableOpacity
-                              style={[styles.appendButton, (!appendText.trim() || appendSaving) && styles.buttonDisabled]}
+                              style={styles.textTapArea}
+                              onPress={() => setEditorTarget('followup')}
+                              activeOpacity={0.7}
+                            >
+                              {appendText ? (
+                                <Text style={styles.textPreview}>{appendText}</Text>
+                              ) : (
+                                <Text style={styles.textPlaceholder}>今の気持ちを書き留めておく…</Text>
+                              )}
+                              <View style={styles.pencilWrap}>
+                                <Ionicons name="pencil-outline" size={13} color={COLORS.inkSoft} />
+                              </View>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.primaryBtn, (!appendText.trim() || appendSaving) && styles.btnDisabled]}
                               onPress={handleSaveFollowUp}
                               disabled={!appendText.trim() || appendSaving}
                             >
                               {appendSaving
-                                ? <ActivityIndicator color="#fff" size="small" />
-                                : <Text style={styles.appendButtonText}>
+                                ? <ActivityIndicator color={COLORS.white} size="small" />
+                                : <Text style={styles.primaryBtnText}>
                                     {selected.unlockEntries.find(e => e.isActive)?.message ? '更新する' : '保存する'}
                                   </Text>
                               }
@@ -608,213 +686,408 @@ export default function AlbumDetailView({ albumId, emptyText, showMoveAction }: 
                           </View>
                         )}
 
-                        {/* Others' visit records (can_message = true) */}
                         {canMessage && selected.othersEntries.filter(e => e.message).length > 0 && (
                           <View style={styles.modalSection}>
                             <Text style={styles.sectionLabel}>共有者の訪問記録</Text>
                             {selected.othersEntries
                               .filter(e => e.message)
                               .map(e => (
-                                <View key={e.unlockRecordId} style={styles.sharedEntry}>
-                                  <Text style={styles.followUpDate}>
-                                    {new Date(e.unlockedAt).toLocaleDateString('ja-JP', {
-                                      year: 'numeric', month: 'long', day: 'numeric',
-                                    })}
-                                  </Text>
-                                  <Text style={styles.followUpContent}>{e.message!.content}</Text>
+                                <View key={e.unlockRecordId} style={styles.sharedItem}>
+                                  <Text style={styles.visitDate}>{formatDate(e.unlockedAt)}</Text>
+                                  <Text style={styles.visitContent}>{e.message!.content}</Text>
                                 </View>
                               ))
                             }
                           </View>
                         )}
-                      </ScrollView>
+                      </>
+                    ) : selected.isSealed ? (
+                      <View style={styles.lockedContent}>
+                        <Ionicons name="lock-closed-outline" size={28} color={COLORS.inkSoft} style={{ marginBottom: SPACING.sm }} />
+                        <Text style={styles.sealedDateModal}>
+                          {new Date(selected.unlock_at!).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })}
+                        </Text>
+                        <Text style={styles.lockedHintModal}>
+                          この日まで封印されています{'\n'}通知が届いたら現地へ向かいましょう
+                        </Text>
+                      </View>
                     ) : (
                       <View style={styles.lockedContent}>
-                        <Text style={styles.lockIconLarge}>🔒</Text>
-                        <Text style={styles.lockedHint}>
-                          この場所へ戻り同じ風景を撮影すると{'\n'}メッセージが解除されます
+                        <Text style={styles.lockedHintModal}>
+                          この場所へ戻り同じ風景を撮影すると{'\n'}メッセージが現れます
                         </Text>
                       </View>
                     )}
 
                     <View style={styles.modalFooter}>
-                      <Text style={styles.modalDate}>
-                        {new Date(selected.taken_at).toLocaleDateString('ja-JP', {
-                          year: 'numeric', month: 'long', day: 'numeric',
-                        })}
-                      </Text>
-                      <View style={styles.footerActions}>
-                        {showMoveAction && isOwnPhoto && (
-                          <TouchableOpacity onPress={openAlbumPicker}>
-                            <Text style={styles.moveText}>アルバムに移動</Text>
-                          </TouchableOpacity>
-                        )}
-                        {isOwnPhoto && (
-                          <TouchableOpacity onPress={handleDelete} disabled={deleting}>
+                      <Text style={styles.modalDate}>{formatDate(selected.taken_at)}</Text>
+                      {isOwnPhoto && (
+                        <View style={styles.footerActions}>
+                          {showMoveAction && (
+                            <TouchableOpacity style={styles.actionBtn} onPress={openAlbumPicker}>
+                              <Ionicons name="folder-open-outline" size={22} color={COLORS.accent} />
+                              <Text style={styles.actionBtnLabel}>移動</Text>
+                            </TouchableOpacity>
+                          )}
+                          <TouchableOpacity style={styles.actionBtn} onPress={handleDelete} disabled={deleting}>
                             {deleting
                               ? <ActivityIndicator size="small" color={COLORS.danger} />
-                              : <Text style={styles.deleteText}>削除</Text>
+                              : <Ionicons name="trash-outline" size={22} color={COLORS.danger} />
                             }
+                            <Text style={[styles.actionBtnLabel, styles.actionBtnLabelDanger]}>削除</Text>
                           </TouchableOpacity>
-                        )}
-                      </View>
+                        </View>
+                      )}
                     </View>
-                  </>
+                  </ScrollView>
                 )
               )}
-            </Pressable>
+            </View>
+          </View>
+        </View>
+
+        {showPhotoFull && selected && (
+          <Pressable style={styles.photoFullScreen} onPress={() => setShowPhotoFull(false)}>
+            <Image
+              source={{ uri: selected.image_url }}
+              style={styles.photoFullImage}
+              resizeMode="contain"
+            />
+            <TouchableOpacity style={styles.photoFullCloseBtn} onPress={() => setShowPhotoFull(false)}>
+              <Ionicons name="close" size={26} color={COLORS.paper} />
+            </TouchableOpacity>
           </Pressable>
-        </KeyboardAvoidingView>
+        )}
+
+        <TextEditorModal
+          visible={editorTarget !== null}
+          title={editorTarget === 'original' ? '思い出のメッセージ' : '今の気持ち'}
+          placeholder={editorTarget === 'original' ? 'メッセージを書く…' : '今の気持ちを書き留めておく…'}
+          initialValue={editorTarget === 'original' ? originalEditText : appendText}
+          onSave={(text) => {
+            if (editorTarget === 'original') setOriginalEditText(text)
+            else setAppendText(text)
+            setEditorTarget(null)
+          }}
+          onCancel={() => setEditorTarget(null)}
+        />
       </Modal>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  emptyText: { fontSize: 15, color: COLORS.subtext, textAlign: 'center' },
-  grid: { padding: 16 },
-  row: { justifyContent: 'space-between', marginBottom: 16 },
-  card: {
-    width: ITEM_SIZE,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  container: { flex: 1, backgroundColor: COLORS.paper },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: SPACING.xxxl },
+  emptyText: { ...TYPE.caption, color: COLORS.inkSoft, textAlign: 'center' },
+
+  // Journal layout — 1カラム縦流し
+  journal: {
+    paddingTop: SPACING.lg,
+    paddingBottom: SPACING.huge,
   },
-  thumbnail: { width: '100%', height: ITEM_SIZE },
-  cardBody: { padding: 8 },
-  messagePreview: { fontSize: 12, color: COLORS.text, lineHeight: 18 },
-  cardLock: { paddingVertical: 6, paddingHorizontal: 8 },
-  lockIcon: { fontSize: 14 },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+  entry: {
+    paddingHorizontal: SPACING.xl,
+    paddingTop: SPACING.huge,
+    paddingBottom: SPACING.md,
+  },
+  entryFirst: { paddingTop: SPACING.xl },
+  entryDate: {
+    ...TYPE.date,
+    marginBottom: SPACING.lg,
+  },
+  entryImage: {
+    width: SCREEN_WIDTH - SPACING.xl * 2,
+    height: (SCREEN_WIDTH - SPACING.xl * 2) * 1.0,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+  },
+  lockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(44,38,32,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    borderRadius: RADIUS.thumb,
+  },
+  lockText: {
+    fontFamily: FONTS.serif,
+    fontSize: 16,
+    color: COLORS.paper,
+    letterSpacing: 2,
+  },
+  messageWrap: {
+    marginTop: SPACING.lg,
+    paddingHorizontal: SPACING.xs,
+  },
+  quoteOpen: {
+    fontFamily: FONTS.serif,
+    fontSize: 22,
+    color: COLORS.inkSub,
+    lineHeight: 22,
+    marginBottom: -6,
+  },
+  messageBody: {
+    ...TYPE.bodySerif,
+    paddingHorizontal: SPACING.md,
+  },
+  quoteClose: {
+    fontFamily: FONTS.serif,
+    fontSize: 22,
+    color: COLORS.inkSub,
+    lineHeight: 22,
+    textAlign: 'right',
+    marginTop: -6,
+  },
+  expandBtn: {
+    marginTop: SPACING.xs,
+    paddingHorizontal: SPACING.xs,
+    alignSelf: 'flex-start',
+  },
+  expandBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.inkSub,
+    letterSpacing: 0.3,
+  },
+  lockedHint: {
+    ...TYPE.caption,
+    color: COLORS.inkSoft,
+    marginTop: SPACING.md,
+    fontStyle: 'italic',
+  },
+
+  // Modal
+  backdrop: {
+    backgroundColor: 'rgba(44,38,32,0.6)',
+  },
+  overlayCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xxl,
   },
   modal: {
     width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
+    backgroundColor: COLORS.paper,
+    borderRadius: SPACING.sm,
     overflow: 'hidden',
     maxHeight: '88%',
   },
-  modalImage: { width: '100%', height: 220 },
-  modalScrollContent: { maxHeight: 340 },
-  modalSection: { padding: 16, gap: 6 },
-  sectionLabel: {
-    fontSize: 11,
-    color: COLORS.subtext,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  modalMessage: { fontSize: 15, color: COLORS.text, lineHeight: 24 },
-  followUpItem: {
-    backgroundColor: COLORS.followUpBg,
-    borderRadius: 8,
-    padding: 10,
-    gap: 4,
-    marginTop: 8,
-  },
-  sharedEntry: {
-    backgroundColor: COLORS.sharedBg,
-    borderRadius: 8,
-    padding: 10,
-    gap: 4,
-    marginTop: 8,
-  },
-  followUpDate: { fontSize: 11, color: COLORS.subtext },
-  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 20 },
-  appendSection: {
-    padding: 16,
-    gap: 8,
+  modalImage: { width: '100%', height: 240 },
+  modalSection: { paddingHorizontal: SPACING.xl, paddingTop: SPACING.lg, gap: SPACING.sm },
+  modalSectionDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: COLORS.border,
+    borderTopColor: COLORS.rule,
+    marginTop: SPACING.md,
+    paddingTop: SPACING.lg,
   },
-  appendInput: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    padding: 10,
-    fontSize: 14,
-    color: COLORS.text,
-    minHeight: 80,
-    backgroundColor: '#fff',
+  sectionLabel: {
+    ...TYPE.meta,
+    textTransform: 'uppercase',
   },
-  appendButton: {
-    backgroundColor: COLORS.accent,
-    paddingVertical: 11,
-    borderRadius: 4,
-    alignItems: 'center',
+  modalMessage: {
+    ...TYPE.bodySerif,
   },
-  buttonDisabled: { opacity: 0.45 },
-  appendButtonText: { color: '#fff', fontSize: 13, letterSpacing: 1 },
-  lockedContent: {
-    paddingVertical: 28,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    gap: 10,
+  visitItem: {
+    backgroundColor: COLORS.paperDeep,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    gap: SPACING.xs,
+    marginTop: SPACING.sm,
+    borderLeftWidth: 2,
+    borderLeftColor: COLORS.rule,
   },
-  lockIconLarge: { fontSize: 30 },
-  lockedHint: {
+  sharedItem: {
+    backgroundColor: COLORS.paperDeep,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    gap: SPACING.xs,
+    marginTop: SPACING.sm,
+    borderLeftWidth: 2,
+    borderLeftColor: COLORS.seal,
+  },
+  visitDate: {
+    fontFamily: FONTS.serif,
     fontSize: 13,
-    color: COLORS.subtext,
-    textAlign: 'center',
+    color: COLORS.inkSub,
+  },
+  visitMemoryThumb: {
+    width: '100%',
+    height: 160,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+    marginTop: SPACING.xs,
+  },
+  visitContent: {
+    ...TYPE.body,
+    fontSize: 14,
     lineHeight: 22,
   },
+  textTapArea: {
+    minHeight: 90,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.rule,
+    borderRadius: RADIUS.thumb,
+    padding: SPACING.md,
+    backgroundColor: COLORS.white,
+    marginTop: SPACING.xs,
+  },
+  textPreview: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    color: COLORS.ink,
+    lineHeight: 24,
+  },
+  textPlaceholder: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    color: COLORS.inkSoft,
+    fontStyle: 'italic',
+  },
+  pencilWrap: {
+    position: 'absolute',
+    top: SPACING.sm,
+    right: SPACING.sm,
+  },
+
+  appendInput: {
+    borderWidth: 1,
+    borderColor: COLORS.rule,
+    borderRadius: RADIUS.thumb,
+    padding: SPACING.md,
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    color: COLORS.ink,
+    minHeight: 90,
+    backgroundColor: COLORS.white,
+    lineHeight: 22,
+    marginTop: SPACING.xs,
+  },
+  primaryBtn: {
+    backgroundColor: COLORS.accent,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.thumb,
+    alignItems: 'center',
+    marginTop: SPACING.sm,
+  },
+  primaryBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    color: COLORS.white,
+    letterSpacing: 1,
+  },
+  btnDisabled: { opacity: 0.45 },
+
+  lockedContent: {
+    paddingVertical: SPACING.xxl,
+    paddingHorizontal: SPACING.xxl,
+    alignItems: 'center',
+  },
+  sealedDateModal: {
+    fontFamily: FONTS.serif,
+    fontSize: 17,
+    color: COLORS.ink,
+    marginBottom: SPACING.sm,
+    textAlign: 'center',
+  },
+  lockedHintModal: {
+    ...TYPE.caption,
+    color: COLORS.inkSoft,
+    textAlign: 'center',
+  },
+
   modalFooter: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: COLORS.border,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    borderTopColor: COLORS.rule,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  modalDate: { fontSize: 12, color: COLORS.subtext },
-  footerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  moveText: { fontSize: 13, color: COLORS.accent },
-  deleteText: { fontSize: 13, color: COLORS.danger },
+  modalDate: {
+    fontFamily: FONTS.serif,
+    fontSize: 14,
+    color: COLORS.inkSub,
+  },
+  footerActions: { flexDirection: 'row', alignItems: 'center', gap: SPACING.xs },
+  actionBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    minWidth: 56,
+  },
+  actionBtnLabel: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    color: COLORS.accent,
+    letterSpacing: 0.3,
+  },
+  actionBtnLabelDanger: { color: COLORS.danger },
+
   pickerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.rule,
   },
-  pickerTitle: { fontSize: 14, fontWeight: '600', color: COLORS.text },
-  pickerCancel: { fontSize: 14, color: COLORS.subtext },
+  pickerTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 16,
+    color: COLORS.ink,
+  },
+  pickerCancel: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    color: COLORS.inkSub,
+  },
   pickerScroll: { maxHeight: 320 },
   pickerRow: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
+    paddingVertical: SPACING.lg,
+    paddingHorizontal: SPACING.xl,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.rule,
   },
-  pickerRowSelected: { backgroundColor: '#F5EFE6' },
-  pickerRowText: { fontSize: 15, color: COLORS.text },
-  newAlbumRow: { paddingHorizontal: 20, paddingVertical: 12, gap: 8 },
+  pickerRowSelected: { backgroundColor: COLORS.paperDeep },
+  pickerRowText: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    color: COLORS.ink,
+  },
+  photoFullScreen: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoFullImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+  },
+  photoFullCloseBtn: {
+    position: 'absolute',
+    top: SPACING.xxl + 16,
+    right: SPACING.xl,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    padding: SPACING.sm,
+  },
+
+  newAlbumRow: { paddingHorizontal: SPACING.xl, paddingVertical: SPACING.md, gap: SPACING.sm },
   newAlbumInput: {
     borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: COLORS.rule,
+    borderRadius: RADIUS.thumb,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    fontFamily: FONTS.sans,
     fontSize: 14,
-    color: COLORS.text,
+    color: COLORS.ink,
+    backgroundColor: COLORS.white,
   },
-  newAlbumConfirm: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 8,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-  newAlbumConfirmText: { color: '#fff', fontSize: 14 },
 })
