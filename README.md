@@ -139,10 +139,10 @@ Expo Go アプリで QR コードを読み取る。
 
 | 項目 | 詳細 |
 |---|---|
-| 共有の取り消し UI がない | 共有した側がアルバム長押しメニューから「誰と共有しているか確認する」「共有を取り消す」操作ができない。DB の RLS（`album_shares_all_by_sharer`）は対応済みのため、UI の追加のみで実装可能 |
-| MemoriesScreen に共有アルバムが表示されない | 受け取った共有アルバムは `AlbumListScreen`（すべて見る）に移動しないと確認できない。`MemoriesScreen` のアルバム取得クエリが `eq('user_id', user.id)` のみで、`shared_to_user_id` のレコードを含んでいないため |
-| `can_add_photos` が DB レベルで強制されていない | `photos` テーブルの INSERT ポリシー（`photos_all_own`）は `user_id = auth.uid()` しか検証しない。`can_add_photos = false` でも API を直接呼び出せば共有アルバムに写真を追加できる。UI 側の制御のみで対応中のため、以下のポリシーを追加するべき：<br>```sql<br>create policy "photos_insert_shared" on public.photos for insert<br>  with check (<br>    auth.uid() = user_id and (<br>      exists (select 1 from albums where id = photos.album_id and user_id = auth.uid())<br>      or exists (<br>        select 1 from album_shares<br>        where album_id = photos.album_id<br>          and shared_to_user_id = auth.uid()<br>          and can_add_photos = true<br>      )<br>    )<br>  );<br>``` |
-| 共有アルバムへの写真追加が非直感的 | `can_add_photos = true` で共有されたアルバムを開いても「写真を追加」ボタンが存在しない。追加にはカメラ撮影 → `WriteMessageScreen` でアルバムを選択する必要があり、受け取った側には気づきにくい |
+| ~~共有の取り消し UI がない~~ | ✅ 実装済み。アルバム長押し →「共有を管理」から承認済み・未承認の共有一覧を確認し、個別に取り消せる |
+| ~~MemoriesScreen に共有アルバムが表示されない~~ | ✅ 実装済み。思い出タブのアルバムセクション下部に「共有アルバム」セクションを追加 |
+| `can_add_photos` が DB レベルで強制されていない | `photos` テーブルの INSERT ポリシー（`photos_all_own`）は `user_id = auth.uid()` しか検証しない。`can_add_photos = false` でも API を直接呼び出せば共有アルバムに写真を追加できる。後回し |
+| アルバムへの写真追加ボタンがない | すべてのアルバムにおいて、アルバム詳細画面から直接写真を追加できない。追加にはカメラ撮影 → `WriteMessageScreen` でアルバムを選択する必要がある。なお `can_add_photos = true` の共有アルバムに受け取り側が写真を追加した場合、その写真は受け取り側の `user_id` で登録されるため、所有者がその写真を読むには所有者自身も撮影地を訪れる必要がある（**相互訪問を促す仕様として意図的に採用**） |
 
 #### その他の機能不足
 
