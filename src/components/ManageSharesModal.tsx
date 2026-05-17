@@ -109,6 +109,12 @@ export default function ManageSharesModal({ album, onClose }: Props) {
             <Text style={styles.albumName} numberOfLines={1}>{album.title}</Text>
           )}
 
+          {!loading && shares.length > 0 && (
+            <Text style={styles.countText}>
+              承認済み {shares.filter(s => s.shared_to_user_id).length} 件 / 合計 {shares.length} 件
+            </Text>
+          )}
+
           {loading ? (
             <View style={styles.centerArea}>
               <ActivityIndicator color={COLORS.accent} />
@@ -213,6 +219,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg,
     paddingTop: SPACING.md,
     paddingBottom: SPACING.xs,
+  },
+  countText: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.inkSoft,
+    textAlign: 'center',
+    paddingBottom: SPACING.sm,
   },
   centerArea: {
     alignItems: 'center',
