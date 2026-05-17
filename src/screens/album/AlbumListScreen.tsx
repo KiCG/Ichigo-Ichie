@@ -11,32 +11,22 @@ import {
   Alert,
   Modal,
   Pressable,
-  TextInput,
-  Share,
   Dimensions,
-  Switch,
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { useFocusEffect } from '@react-navigation/native'
-import { CameraView, useCameraPermissions } from 'expo-camera'
-import QRCode from 'react-native-qrcode-svg'
+import AcceptShareModal from '../../components/AcceptShareModal'
+import ShareAlbumModal from '../../components/ShareAlbumModal'
+import ManageSharesModal from '../../components/ManageSharesModal'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
-import type { AlbumStackParamList } from '../../types'
-
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-}
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../../theme'
+import type { MemoriesStackParamList } from '../../types'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
-const QR_SIZE = Math.min(SCREEN_WIDTH - 120, 220)
-const SCANNER_SIZE = SCREEN_WIDTH - 96
 
 type Props = {
-  navigation: NativeStackNavigationProp<AlbumStackParamList, 'AlbumList'>
+  navigation: NativeStackNavigationProp<MemoriesStackParamList, 'AlbumList'>
 }
 
 type AlbumCard = {
@@ -46,6 +36,7 @@ type AlbumCard = {
   photoCount: number
   bookshelfId: string | null
   bookshelfTitle: string | null
+  createdAt: string
 }
 
 type SharedAlbumCard = {
@@ -58,6 +49,11 @@ type SharedAlbumCard = {
 
 type ShelfOption = { id: string; title: string }
 
+function formatYearMonth(d: string): string {
+  const date = new Date(d)
+  return `${date.getFullYear()}年${date.getMonth() + 1}月`
+}
+
 export default function AlbumListScreen({ navigation }: Props) {
   const [albums, setAlbums] = useState<AlbumCard[]>([])
   const [sharedAlbums, setSharedAlbums] = useState<SharedAlbumCard[]>([])
@@ -67,24 +63,10 @@ export default function AlbumListScreen({ navigation }: Props) {
   const [moveTarget, setMoveTarget] = useState<AlbumCard | null>(null)
   const [moving, setMoving] = useState(false)
 
-  // Share settings modal (step 1)
-  const [shareSettingsModal, setShareSettingsModal] = useState(false)
   const [pendingAlbum, setPendingAlbum] = useState<AlbumCard | null>(null)
-  const [settingCanMessage, setSettingCanMessage] = useState(false)
-  const [settingCanAddPhotos, setSettingCanAddPhotos] = useState(false)
-  const [generating, setGenerating] = useState(false)
+  const [manageTarget, setManageTarget] = useState<{ id: string; title: string } | null>(null)
 
-  // QR code display modal (step 2)
-  const [qrModal, setQrModal] = useState<{ token: string; albumTitle: string } | null>(null)
-
-  // Accept modal
   const [showShareCodeModal, setShowShareCodeModal] = useState(false)
-  const [shareCodeInput, setShareCodeInput] = useState('')
-  const [accepting, setAccepting] = useState(false)
-  const [showQrScanner, setShowQrScanner] = useState(false)
-  const [scanned, setScanned] = useState(false)
-
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions()
 
   const fetchData = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -97,7 +79,7 @@ export default function AlbumListScreen({ navigation }: Props) {
     ] = await Promise.all([
       supabase
         .from('albums')
-        .select('id, title, bookshelf_id')
+        .select('id, title, bookshelf_id, created_at')
         .eq('user_id', user.id)
         .eq('is_desk', false)
         .order('created_at', { ascending: false }),
@@ -141,6 +123,7 @@ export default function AlbumListScreen({ navigation }: Props) {
         photoCount: statsMap[a.id]?.count ?? 0,
         bookshelfId: a.bookshelf_id ?? null,
         bookshelfTitle: a.bookshelf_id ? (shelfMap[a.bookshelf_id] ?? null) : null,
+        createdAt: a.created_at,
       })))
     }
 
@@ -199,43 +182,10 @@ export default function AlbumListScreen({ navigation }: Props) {
     setRefreshing(false)
   }, [fetchData])
 
-  const openShareSettings = (album: AlbumCard) => {
-    setPendingAlbum(album)
-    setSettingCanMessage(false)
-    setSettingCanAddPhotos(false)
-    setShareSettingsModal(true)
-  }
-
-  const handleGenerateShare = async () => {
-    if (!pendingAlbum) return
-    setGenerating(true)
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data, error } = await supabase
-        .from('album_shares')
-        .insert({
-          album_id: pendingAlbum.id,
-          shared_by_user_id: user.id,
-          permission: 'read_only',
-          can_message: settingCanMessage,
-          can_add_photos: settingCanAddPhotos,
-        })
-        .select('share_token')
-        .single()
-      if (error || !data) throw error ?? new Error('failed')
-      setShareSettingsModal(false)
-      setQrModal({ token: String(data.share_token), albumTitle: pendingAlbum.title })
-    } catch {
-      Alert.alert('エラー', '共有コードの生成に失敗しました。')
-    } finally {
-      setGenerating(false)
-    }
-  }
-
   const handleLongPress = (album: AlbumCard) => {
     const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [
-      { text: '共有する', onPress: () => openShareSettings(album) },
+      { text: '共有する', onPress: () => setPendingAlbum(album) },
+      { text: '共有を管理', onPress: () => setManageTarget(album) },
       {
         text: album.bookshelfId ? '別の本棚に移動' : '本棚に移動',
         onPress: () => setMoveTarget(album),
@@ -339,55 +289,6 @@ export default function AlbumListScreen({ navigation }: Props) {
     }
   }
 
-  const handleAcceptShare = async (tokenOverride?: string) => {
-    const token = (tokenOverride ?? shareCodeInput).trim()
-    if (!token) return
-    setAccepting(true)
-    try {
-      const { data, error } = await supabase.rpc('accept_album_share', { p_token: token })
-      if (error) throw error
-      if (!data) {
-        Alert.alert('無効なコード', 'このコードは無効か、すでに使用済みです。')
-        return
-      }
-      setShowShareCodeModal(false)
-      setShareCodeInput('')
-      setShowQrScanner(false)
-      await fetchData()
-      Alert.alert('追加しました', '共有アルバムが追加されました。')
-    } catch {
-      Alert.alert('エラー', '操作に失敗しました。もう一度お試しください。')
-    } finally {
-      setAccepting(false)
-    }
-  }
-
-  const handleOpenQrScanner = async () => {
-    if (!cameraPermission?.granted) {
-      const { granted } = await requestCameraPermission()
-      if (!granted) {
-        Alert.alert('カメラへのアクセスが必要です', '設定からカメラの使用を許可してください。')
-        return
-      }
-    }
-    setScanned(false)
-    setShowQrScanner(true)
-  }
-
-  const handleBarcodeScanned = ({ data }: { data: string }) => {
-    if (scanned) return
-    setScanned(true)
-    setShowQrScanner(false)
-    handleAcceptShare(data)
-  }
-
-  const closeAcceptModal = () => {
-    setShowShareCodeModal(false)
-    setShareCodeInput('')
-    setShowQrScanner(false)
-    setScanned(false)
-  }
-
   if (loading) {
     return (
       <View style={styles.center}>
@@ -396,55 +297,58 @@ export default function AlbumListScreen({ navigation }: Props) {
     )
   }
 
-  const renderOwnCard = (item: AlbumCard) => (
+  const renderOwnRow = (item: AlbumCard) => (
     <TouchableOpacity
       key={item.id}
-      style={styles.card}
+      style={styles.row}
       onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
       onLongPress={() => handleLongPress(item)}
-      activeOpacity={0.8}
+      activeOpacity={0.7}
     >
       {item.coverUrl ? (
         <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
       ) : (
-        <View style={[styles.cover, styles.coverPlaceholder]}>
-          <Text style={styles.coverPlaceholderText}>写真なし</Text>
-        </View>
+        <View style={[styles.cover, styles.coverPlaceholder]} />
       )}
-      <View style={styles.cardBody}>
-        <Text style={styles.albumTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.photoCount}>{item.photoCount}枚</Text>
-        {item.bookshelfTitle && (
-          <View style={styles.shelfBadge}>
-            <Text style={styles.shelfBadgeText}>📚 {item.bookshelfTitle}</Text>
-          </View>
-        )}
+      <View style={styles.rowBody}>
+        <Text style={styles.rowDate}>{formatYearMonth(item.createdAt)}</Text>
+        <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+        <View style={styles.rowMetaLine}>
+          <Text style={styles.rowMeta}>{item.photoCount}枚</Text>
+          {item.bookshelfTitle && (
+            <Text style={styles.rowShelf}>・{item.bookshelfTitle}</Text>
+          )}
+        </View>
       </View>
+      <TouchableOpacity style={styles.moreBtn} onPress={() => handleLongPress(item)} hitSlop={8}>
+        <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.inkSoft} />
+      </TouchableOpacity>
     </TouchableOpacity>
   )
 
-  const renderSharedCard = (item: SharedAlbumCard) => (
+  const renderSharedRow = (item: SharedAlbumCard) => (
     <TouchableOpacity
       key={item.id}
-      style={styles.card}
+      style={styles.row}
       onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
-      onLongPress={() => handleLongPressShared(item)}
-      activeOpacity={0.8}
+      activeOpacity={0.7}
     >
       {item.coverUrl ? (
         <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
       ) : (
-        <View style={[styles.cover, styles.coverPlaceholder]}>
-          <Text style={styles.coverPlaceholderText}>写真なし</Text>
-        </View>
+        <View style={[styles.cover, styles.coverPlaceholder]} />
       )}
-      <View style={styles.cardBody}>
-        <Text style={styles.albumTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.photoCount}>{item.photoCount}枚</Text>
-        <View style={styles.sharedBadge}>
-          <Text style={styles.sharedBadgeText}>共有</Text>
-        </View>
+      <View style={styles.rowBody}>
+        <Text style={styles.rowDate}>共有アルバム</Text>
+        <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+        <Text style={styles.rowMeta}>{item.photoCount}枚</Text>
       </View>
+      <View style={styles.sealBadge}>
+        <Text style={styles.sealText}>共</Text>
+      </View>
+      <TouchableOpacity style={styles.moreBtn} onPress={() => handleLongPressShared(item)} hitSlop={8}>
+        <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.inkSoft} />
+      </TouchableOpacity>
     </TouchableOpacity>
   )
 
@@ -457,32 +361,29 @@ export default function AlbumListScreen({ navigation }: Props) {
         }
       >
         <TouchableOpacity
-          style={styles.shareCodeRow}
+          style={styles.acceptBtn}
           onPress={() => setShowShareCodeModal(true)}
+          activeOpacity={0.7}
         >
-          <Text style={styles.shareCodeRowText}>共有コードを入力 / QRスキャン</Text>
+          <Text style={styles.acceptBtnText}>共有アルバムを追加</Text>
         </TouchableOpacity>
 
         {albums.length === 0 ? (
-          <View style={styles.emptySection}>
-            <Text style={styles.emptyText}>アルバムがありません</Text>
-            <Text style={styles.emptySubtext}>
-              写真を撮ってメッセージを残すとアルバムが作られます
-            </Text>
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>アルバムはまだありません</Text>
+            <Text style={styles.emptySubtext}>写真にメッセージを残すと、アルバムが綴られます</Text>
           </View>
         ) : (
           <View style={styles.list}>
-            {albums.map(renderOwnCard)}
+            {albums.map(renderOwnRow)}
           </View>
         )}
 
         {sharedAlbums.length > 0 && (
           <>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionHeaderText}>共有されたアルバム</Text>
-            </View>
+            <Text style={styles.sectionDivider}>共有されたアルバム</Text>
             <View style={styles.list}>
-              {sharedAlbums.map(renderSharedCard)}
+              {sharedAlbums.map(renderSharedRow)}
             </View>
           </>
         )}
@@ -506,7 +407,7 @@ export default function AlbumListScreen({ navigation }: Props) {
             {bookshelves.length === 0 ? (
               <View style={styles.pickerEmpty}>
                 <Text style={styles.emptySubtext}>
-                  本棚がありません。{'\n'}本棚タブから先に本棚を作成してください。
+                  本棚がありません。{'\n'}「本棚」セクションから先に本棚を作成してください。
                 </Text>
               </View>
             ) : (
@@ -528,377 +429,167 @@ export default function AlbumListScreen({ navigation }: Props) {
         </Pressable>
       </Modal>
 
-      {/* Share settings modal (step 1) */}
-      <Modal
-        visible={shareSettingsModal}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setShareSettingsModal(false)}
-      >
-        <Pressable style={styles.overlay} onPress={() => setShareSettingsModal(false)}>
-          <Pressable style={styles.pickerModal}>
-            <View style={styles.pickerHeader}>
-              <Text style={styles.pickerTitle}>共有設定</Text>
-              <TouchableOpacity onPress={() => setShareSettingsModal(false)}>
-                <Text style={styles.cancelText}>キャンセル</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.settingsBody}>
-              {pendingAlbum && (
-                <Text style={styles.settingsAlbumName} numberOfLines={1}>
-                  {pendingAlbum.title}
-                </Text>
-              )}
-              <View style={styles.settingRow}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>メッセージを相互表示する</Text>
-                  <Text style={styles.settingDesc}>
-                    お互いの訪問メッセージが見られるようになります
-                  </Text>
-                </View>
-                <Switch
-                  value={settingCanMessage}
-                  onValueChange={setSettingCanMessage}
-                  trackColor={{ true: COLORS.accent }}
-                  thumbColor="#fff"
-                />
-              </View>
-              <View style={[styles.settingRow, styles.settingRowLast]}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>写真の追加を許可する</Text>
-                  <Text style={styles.settingDesc}>
-                    受け取った側もアルバムに写真を追加できます
-                  </Text>
-                </View>
-                <Switch
-                  value={settingCanAddPhotos}
-                  onValueChange={setSettingCanAddPhotos}
-                  trackColor={{ true: COLORS.accent }}
-                  thumbColor="#fff"
-                />
-              </View>
-              <TouchableOpacity
-                style={[styles.generateButton, generating && styles.buttonDisabled]}
-                onPress={handleGenerateShare}
-                disabled={generating}
-              >
-                {generating
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.generateButtonText}>共有コードを生成する</Text>
-                }
-              </TouchableOpacity>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <ShareAlbumModal
+        album={pendingAlbum}
+        onClose={() => setPendingAlbum(null)}
+      />
 
-      {/* QR code display modal (step 2) */}
-      <Modal
-        visible={qrModal !== null}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setQrModal(null)}
-      >
-        <Pressable style={styles.overlay} onPress={() => setQrModal(null)}>
-          <Pressable style={styles.qrDisplayModal}>
-            <View style={styles.pickerHeader}>
-              <Text style={styles.pickerTitle}>アルバムを共有</Text>
-              <TouchableOpacity onPress={() => setQrModal(null)}>
-                <Text style={styles.cancelText}>閉じる</Text>
-              </TouchableOpacity>
-            </View>
-            {qrModal && (
-              <View style={styles.qrContent}>
-                <Text style={styles.qrAlbumTitle} numberOfLines={1}>{qrModal.albumTitle}</Text>
-                <View style={styles.qrWrapper}>
-                  <QRCode value={qrModal.token} size={QR_SIZE} backgroundColor="#fff" />
-                </View>
-                <Text style={styles.qrHint}>
-                  相手にこのQRコードをスキャンしてもらうか{'\n'}共有シートでコードを送ってください
-                </Text>
-                <TouchableOpacity
-                  style={styles.shareSheetButton}
-                  onPress={() => Share.share({
-                    message: `一期一会のアルバム「${qrModal.albumTitle}」を共有します。\n共有コード: ${qrModal.token}`,
-                  })}
-                >
-                  <Text style={styles.shareSheetButtonText}>共有シートで送る</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <ManageSharesModal
+        album={manageTarget}
+        onClose={() => setManageTarget(null)}
+      />
 
-      {/* Accept share modal */}
-      <Modal
+      <AcceptShareModal
         visible={showShareCodeModal}
-        animationType="fade"
-        transparent
-        onRequestClose={closeAcceptModal}
-      >
-        <Pressable style={styles.overlay} onPress={showQrScanner ? undefined : closeAcceptModal}>
-          <Pressable style={styles.pickerModal}>
-            <View style={styles.pickerHeader}>
-              <Text style={styles.pickerTitle}>共有アルバムを追加</Text>
-              <TouchableOpacity onPress={closeAcceptModal}>
-                <Text style={styles.cancelText}>キャンセル</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.toggleRow}>
-              <TouchableOpacity
-                style={[styles.toggleBtn, !showQrScanner && styles.toggleBtnActive]}
-                onPress={() => setShowQrScanner(false)}
-              >
-                <Text style={[styles.toggleBtnText, !showQrScanner && styles.toggleBtnTextActive]}>
-                  コードを入力
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.toggleBtn, showQrScanner && styles.toggleBtnActive]}
-                onPress={handleOpenQrScanner}
-              >
-                <Text style={[styles.toggleBtnText, showQrScanner && styles.toggleBtnTextActive]}>
-                  QRスキャン
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {showQrScanner ? (
-              <View style={styles.scannerWrapper}>
-                <CameraView
-                  style={styles.scanner}
-                  facing="back"
-                  onBarcodeScanned={handleBarcodeScanned}
-                  barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                />
-                <View style={styles.scannerFrame} pointerEvents="none" />
-                {accepting && (
-                  <View style={styles.scannerOverlay}>
-                    <ActivityIndicator color="#fff" size="large" />
-                  </View>
-                )}
-              </View>
-            ) : (
-              <View style={styles.shareCodeInputWrapper}>
-                <TextInput
-                  style={styles.shareCodeInput}
-                  value={shareCodeInput}
-                  onChangeText={setShareCodeInput}
-                  placeholder="共有コードを貼り付け"
-                  placeholderTextColor={COLORS.subtext}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <TouchableOpacity
-                  style={[styles.acceptButton, (!shareCodeInput.trim() || accepting) && styles.buttonDisabled]}
-                  onPress={() => handleAcceptShare()}
-                  disabled={!shareCodeInput.trim() || accepting}
-                >
-                  {accepting
-                    ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={styles.acceptButtonText}>追加する</Text>
-                  }
-                </TouchableOpacity>
-              </View>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setShowShareCodeModal(false)}
+        onAccepted={fetchData}
+      />
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 },
-  scrollContent: { paddingBottom: 32 },
-  emptySection: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 32, gap: 8 },
-  emptyText: { fontSize: 15, color: COLORS.text, textAlign: 'center' },
-  emptySubtext: { fontSize: 13, color: COLORS.subtext, textAlign: 'center', lineHeight: 20 },
-  shareCodeRow: {
-    marginHorizontal: 16,
-    marginTop: 16,
-    marginBottom: 4,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#fff',
+  container: { flex: 1, backgroundColor: COLORS.paper },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.paper },
+  scrollContent: { paddingBottom: SPACING.xxxl },
+
+  acceptBtn: {
+    marginHorizontal: SPACING.xl,
+    marginTop: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.accent,
+    borderRadius: RADIUS.thumb,
     alignItems: 'center',
   },
-  shareCodeRowText: { fontSize: 14, color: COLORS.accent },
-  list: { padding: 16, paddingTop: 8, gap: 12 },
-  sectionHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
-  sectionHeaderText: { fontSize: 12, color: COLORS.subtext, letterSpacing: 1 },
-  card: {
+  acceptBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    color: COLORS.accent,
+    letterSpacing: 0.5,
+  },
+
+  empty: {
+    paddingVertical: SPACING.huge,
+    paddingHorizontal: SPACING.xxxl,
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  emptyText: { ...TYPE.body, textAlign: 'center' },
+  emptySubtext: { ...TYPE.caption, color: COLORS.inkSoft, textAlign: 'center' },
+
+  sectionDivider: {
+    ...TYPE.meta,
+    paddingHorizontal: SPACING.xl,
+    marginTop: SPACING.xxl,
+    marginBottom: SPACING.sm,
+  },
+
+  list: {
+    marginTop: SPACING.lg,
+    marginHorizontal: SPACING.xl,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.rule,
+  },
+  row: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: 'hidden',
+    alignItems: 'center',
+    paddingVertical: SPACING.md,
+    gap: SPACING.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.rule,
   },
-  cover: { width: 100, height: 100 },
-  coverPlaceholder: { backgroundColor: COLORS.border, alignItems: 'center', justifyContent: 'center' },
-  coverPlaceholderText: { fontSize: 11, color: COLORS.subtext },
-  cardBody: { flex: 1, padding: 14, justifyContent: 'space-between', gap: 4 },
-  albumTitle: { fontSize: 15, color: COLORS.text, fontWeight: '500', lineHeight: 21 },
-  photoCount: { fontSize: 12, color: COLORS.subtext },
-  shelfBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#F0EDE8',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+  cover: {
+    width: 64,
+    height: 64,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
   },
-  shelfBadgeText: { fontSize: 11, color: COLORS.accent },
-  sharedBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#E8F0F0',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+  coverPlaceholder: { backgroundColor: COLORS.paperDeep },
+  rowBody: { flex: 1, gap: 2 },
+  rowDate: {
+    fontFamily: FONTS.serif,
+    fontSize: 12,
+    color: COLORS.inkSub,
   },
-  sharedBadgeText: { fontSize: 11, color: '#4A7A7A' },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  rowTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 16,
+    color: COLORS.ink,
+  },
+  rowMetaLine: { flexDirection: 'row', alignItems: 'center' },
+  rowMeta: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    color: COLORS.inkSoft,
+    letterSpacing: 0.5,
+  },
+  rowShelf: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    color: COLORS.inkSoft,
+  },
+  moreBtn: {
+    padding: SPACING.sm,
+    marginLeft: SPACING.xs,
+  },
+  sealBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: COLORS.seal,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
   },
-  pickerModal: { width: '100%', backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden' },
+  sealText: {
+    fontFamily: FONTS.serif,
+    fontSize: 12,
+    color: COLORS.paper,
+  },
+
+  // Modals
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(44,38,32,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xxxl,
+  },
+  pickerModal: { width: '100%', backgroundColor: COLORS.paper, borderRadius: SPACING.sm, overflow: 'hidden' },
   pickerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.rule,
   },
-  pickerTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text },
-  cancelText: { fontSize: 14, color: COLORS.subtext },
-  pickerEmpty: { padding: 24, alignItems: 'center' },
+  pickerTitle: { fontFamily: FONTS.serif, fontSize: 16, color: COLORS.ink },
+  cancelText: { fontFamily: FONTS.sans, fontSize: 14, color: COLORS.inkSub },
+  pickerEmpty: { padding: SPACING.xxl, alignItems: 'center' },
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 15,
-    paddingHorizontal: 20,
+    paddingVertical: SPACING.lg,
+    paddingHorizontal: SPACING.xl,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.rule,
   },
-  pickerRowActive: { backgroundColor: '#F5EFE6' },
-  pickerRowText: { fontSize: 15, color: COLORS.text },
-  pickerRowSub: { fontSize: 12, color: COLORS.subtext },
-  // Share settings
-  settingsBody: { padding: 20, gap: 16 },
-  settingsAlbumName: {
-    fontSize: 13,
-    color: COLORS.subtext,
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  settingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
-    gap: 12,
-  },
-  settingRowLast: { borderBottomWidth: 0 },
-  settingInfo: { flex: 1, gap: 2 },
-  settingLabel: { fontSize: 14, color: COLORS.text, fontWeight: '500' },
-  settingDesc: { fontSize: 12, color: COLORS.subtext, lineHeight: 17 },
-  generateButton: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 8,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  generateButtonText: { color: '#fff', fontSize: 14, fontWeight: '500' },
-  // QR display
-  qrDisplayModal: { width: '100%', backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden' },
-  qrContent: { alignItems: 'center', paddingHorizontal: 24, paddingBottom: 24, gap: 16 },
-  qrAlbumTitle: { fontSize: 14, color: COLORS.subtext, marginTop: 4 },
-  qrWrapper: {
-    padding: 16,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  qrHint: { fontSize: 12, color: COLORS.subtext, textAlign: 'center', lineHeight: 18 },
-  shareSheetButton: {
+  pickerRowActive: { backgroundColor: COLORS.paperDeep },
+  pickerRowText: { fontFamily: FONTS.serif, fontSize: 15, color: COLORS.ink },
+  pickerRowSub: { fontFamily: FONTS.sans, fontSize: 12, color: COLORS.inkSoft },
+
+  primaryBtn: {
     width: '100%',
-    paddingVertical: 13,
-    borderRadius: 8,
     backgroundColor: COLORS.accent,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.thumb,
     alignItems: 'center',
+    marginTop: SPACING.xs,
   },
-  shareSheetButtonText: { color: '#fff', fontSize: 14, fontWeight: '500' },
-  // Toggle
-  toggleRow: {
-    flexDirection: 'row',
-    margin: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: 'hidden',
-  },
-  toggleBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', backgroundColor: '#fff' },
-  toggleBtnActive: { backgroundColor: COLORS.accent },
-  toggleBtnText: { fontSize: 13, color: COLORS.subtext },
-  toggleBtnTextActive: { color: '#fff', fontWeight: '500' },
-  // Scanner
-  scannerWrapper: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    borderRadius: 12,
-    overflow: 'hidden',
-    height: SCANNER_SIZE,
-    position: 'relative',
-  },
-  scanner: { width: '100%', height: '100%' },
-  scannerFrame: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: 180,
-    height: 180,
-    marginTop: -90,
-    marginLeft: -90,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.8)',
-    borderRadius: 12,
-  },
-  scannerOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Text input
-  shareCodeInputWrapper: { paddingHorizontal: 16, paddingBottom: 16, gap: 12 },
-  shareCodeInput: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 14,
-    color: COLORS.text,
-  },
-  acceptButton: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  buttonDisabled: { opacity: 0.45 },
-  acceptButtonText: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  primaryBtnText: { fontFamily: FONTS.sans, fontSize: 14, color: COLORS.white, letterSpacing: 1 },
+  btnDisabled: { opacity: 0.45 },
+
 })
