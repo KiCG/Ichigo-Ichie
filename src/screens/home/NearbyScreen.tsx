@@ -91,7 +91,7 @@ export default function NearbyScreen({ navigation }: Props) {
   const zoomRef = useRef(10)
 
   // zoom 7→24px、zoom 13→48px でリニア補間し上下をクランプ
-  const markerSize = Math.max(28, Math.min(48, (zoomRef.current - 7) * 4 + 24))
+  const markerSize = Math.max(36, Math.min(48, (zoomRef.current - 7) * 4 + 24))
 
   const calcClusters = useCallback((region: Region) => {
     if (!scRef.current) return

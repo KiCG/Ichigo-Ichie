@@ -6,28 +6,72 @@ import {
   Text,
   ActivityIndicator,
   Alert,
+  PanResponder,
 } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
+import { Ionicons } from '@expo/vector-icons'
+import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import * as Location from 'expo-location'
 import * as MediaLibrary from 'expo-media-library'
 import * as FileSystem from 'expo-file-system/legacy'
 import { decode } from 'base64-arraybuffer'
-import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
 import { getCameraRollPreference } from '../../lib/cameraRollPreference'
+import { getAfterCapturePreference } from '../../lib/afterCapturePreference'
+import { COLORS, FONTS, SPACING, RADIUS, TYPE } from '../../theme'
 import type { CameraStackParamList } from '../../types'
 
 type Props = {
   navigation: NativeStackNavigationProp<CameraStackParamList, 'Capture'>
 }
 
+// expo-camera の zoom prop は 0–1 スケール（0=最小、1=デバイス最大ズーム）
+// ここでは "表示上の倍率" を 1–MAX_FACTOR で管理し、0–1 に変換して渡す
+const MAX_ZOOM_FACTOR = 10
+const factorToZoom = (f: number) => (f - 1) / (MAX_ZOOM_FACTOR - 1)
+
+function formatFactor(f: number): string {
+  const rounded = Math.round(f * 10) / 10
+  return Number.isInteger(rounded) ? `${rounded}×` : `${rounded.toFixed(1)}×`
+}
+
 export default function CaptureScreen({ navigation }: Props) {
   const cameraRef = useRef<CameraView>(null)
   const [capturing, setCapturing] = useState(false)
+  const [facing, setFacing] = useState<'front' | 'back'>('back')
+  const [zoomFactor, setZoomFactor] = useState(1)
+
+  const pinchRef = useRef<{ distance: number; baseFactor: number } | null>(null)
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const [locationPermission, requestLocationPermission] = Location.useForegroundPermissions()
   const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions()
+
+  const panResponder = PanResponder.create({
+    onStartShouldSetPanResponder: (e) => e.nativeEvent.touches.length === 2,
+    onMoveShouldSetPanResponder: (e) => e.nativeEvent.touches.length === 2,
+    onPanResponderGrant: (e) => {
+      const t = e.nativeEvent.touches
+      if (t.length === 2) {
+        const dx = t[0].pageX - t[1].pageX
+        const dy = t[0].pageY - t[1].pageY
+        pinchRef.current = { distance: Math.sqrt(dx * dx + dy * dy), baseFactor: zoomFactor }
+      }
+    },
+    onPanResponderMove: (e) => {
+      const t = e.nativeEvent.touches
+      if (t.length === 2 && pinchRef.current) {
+        const dx = t[0].pageX - t[1].pageX
+        const dy = t[0].pageY - t[1].pageY
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const scale = dist / pinchRef.current.distance
+        const newFactor = Math.max(1, Math.min(MAX_ZOOM_FACTOR, pinchRef.current.baseFactor * scale))
+        setZoomFactor(newFactor)
+      }
+    },
+    onPanResponderRelease: () => { pinchRef.current = null },
+    onPanResponderTerminate: () => { pinchRef.current = null },
+  })
 
   if (!cameraPermission) {
     return <View style={styles.container} />
@@ -65,7 +109,6 @@ export default function CaptureScreen({ navigation }: Props) {
 
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
 
-      // カメラロール保存（all 設定時）
       const pref = await getCameraRollPreference()
       if (pref === 'all') {
         if (!mediaPermission?.granted) {
@@ -76,7 +119,6 @@ export default function CaptureScreen({ navigation }: Props) {
         }
       }
 
-      // Storage にアップロード
       const fileUri = photo.uri.startsWith('file://') ? photo.uri : `file://${photo.uri}`
       const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: 'base64' })
       const fileName = `${user.id}/${Date.now()}.jpg`
@@ -87,17 +129,19 @@ export default function CaptureScreen({ navigation }: Props) {
 
       const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(fileName)
 
-      // photos テーブルに保存（album_id なし = tmp 状態）
-      const { error: insertError } = await supabase.from('photos').insert({
+      const { data: inserted, error: insertError } = await supabase.from('photos').insert({
         user_id: user.id,
         image_url: publicUrl,
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
         taken_at: new Date().toISOString(),
-      })
+      }).select('id').single()
       if (insertError) throw insertError
 
-      // 撮影完了（画面はそのまま）
+      const shouldNavigate = await getAfterCapturePreference()
+      if (shouldNavigate && inserted) {
+        navigation.navigate('WriteMessage', { photoId: inserted.id, imageUrl: publicUrl })
+      }
     } catch (e: unknown) {
       console.error('CaptureScreen error:', e)
       Alert.alert('エラー', '撮影中にエラーが発生しました')
@@ -107,19 +151,40 @@ export default function CaptureScreen({ navigation }: Props) {
   }
 
   return (
-    <View style={styles.container}>
-      <CameraView style={styles.camera} facing="back" ref={cameraRef} />
+    <View style={styles.container} {...panResponder.panHandlers}>
+      <CameraView
+        style={styles.camera}
+        facing={facing}
+        zoom={factorToZoom(zoomFactor)}
+        ref={cameraRef}
+      />
+
       <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.shutter, capturing && styles.shutterDisabled]}
-          onPress={takePicture}
-          disabled={capturing}
-        >
-          {capturing
-            ? <ActivityIndicator color="#fff" size="small" />
-            : <View style={styles.shutterInner} />
-          }
-        </TouchableOpacity>
+        <Text style={styles.zoomDisplay}>{formatFactor(zoomFactor)}</Text>
+
+        <View style={styles.shutterRow}>
+          <View style={styles.shutterSide} />
+
+          <TouchableOpacity
+            style={[styles.shutter, capturing && styles.shutterDisabled]}
+            onPress={takePicture}
+            disabled={capturing}
+          >
+            {capturing
+              ? <ActivityIndicator color={COLORS.white} size="small" />
+              : <View style={styles.shutterInner} />
+            }
+          </TouchableOpacity>
+
+          <View style={styles.shutterSide}>
+            <TouchableOpacity
+              style={styles.flipButton}
+              onPress={() => setFacing(f => f === 'back' ? 'front' : 'back')}
+            >
+              <Ionicons name="camera-reverse-outline" size={28} color={COLORS.paper} />
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
     </View>
   )
@@ -130,56 +195,89 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  camera: {
-    flex: 1,
-  },
+  camera: { flex: 1 },
+
   controls: {
     position: 'absolute',
-    bottom: 48,
+    bottom: SPACING.huge,
     left: 0,
     right: 0,
     alignItems: 'center',
+    gap: SPACING.md,
+  },
+
+  zoomDisplay: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.paper,
+    letterSpacing: 0.5,
+    backgroundColor: 'rgba(80,80,80,0.6)',
+    borderRadius: 20,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    overflow: 'hidden',
+    textAlign: 'center',
+  },
+
+  shutterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    paddingHorizontal: SPACING.xxxl,
+    marginTop: SPACING.sm,
+  },
+  shutterSide: {
+    flex: 1,
+    alignItems: 'center',
   },
   shutter: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 4,
-    borderColor: '#fff',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 3,
+    borderColor: COLORS.paper,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  shutterDisabled: {
-    opacity: 0.5,
-  },
+  shutterDisabled: { opacity: 0.5 },
   shutterInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#fff',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.paper,
   },
+  flipButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
   permissionContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#000',
-    paddingHorizontal: 32,
+    backgroundColor: COLORS.paper,
+    paddingHorizontal: SPACING.xxxl,
+    gap: SPACING.xxl,
   },
   permissionText: {
-    color: '#fff',
-    fontSize: 15,
-    marginBottom: 24,
+    ...TYPE.body,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 26,
   },
   permissionButton: {
-    backgroundColor: '#8B7355',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 4,
+    backgroundColor: COLORS.accent,
+    paddingHorizontal: SPACING.xxxl,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.thumb,
   },
   permissionButtonText: {
-    color: '#fff',
+    color: COLORS.white,
+    fontFamily: FONTS.sans,
     fontSize: 15,
     letterSpacing: 1,
   },

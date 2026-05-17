@@ -35,6 +35,8 @@ export interface Photo {
   latitude: number
   longitude: number
   taken_at: string
+  unlock_at: string | null
+  notify_shared: boolean
 }
 
 export interface Message {

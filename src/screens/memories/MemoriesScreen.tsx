@@ -30,6 +30,7 @@ type AlbumPreview = {
 }
 type SharedAlbumPreview = {
   id: string; title: string; coverUrl: string | null; photoCount: number; shareId: string
+  bookshelfId: string | null; bookshelfTitle: string | null
 }
 type ShelfPreview = { id: string; title: string; albumCount: number; coverUrl: string | null }
 type ShelfOption = { id: string; title: string }
@@ -82,6 +83,7 @@ export default function MemoriesScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [moveTarget, setMoveTarget] = useState<AlbumPreview | null>(null)
+  const [sharedMoveTarget, setSharedMoveTarget] = useState<SharedAlbumPreview | null>(null)
   const [moving, setMoving] = useState(false)
   const [shareTarget, setShareTarget] = useState<AlbumPreview | null>(null)
   const [manageTarget, setManageTarget] = useState<{ id: string; title: string } | null>(null)
@@ -133,7 +135,7 @@ export default function MemoriesScreen() {
         .order('created_at', { ascending: false }),
       supabase
         .from('album_shares')
-        .select('id, album_id')
+        .select('id, album_id, recipient_bookshelf_id')
         .eq('shared_to_user_id', user.id),
     ])
 
@@ -229,10 +231,10 @@ export default function MemoriesScreen() {
 
     // Shared albums received by the user
     if (shareData?.length) {
-      const shareMap: Record<string, string> = {}
+      const shareMap: Record<string, { shareId: string; bookshelfId: string | null }> = {}
       const sharedAlbumIds: string[] = []
       for (const s of shareData) {
-        shareMap[s.album_id] = s.id
+        shareMap[s.album_id] = { shareId: s.id, bookshelfId: s.recipient_bookshelf_id ?? null }
         sharedAlbumIds.push(s.album_id)
       }
       const [{ data: saData }, { data: spData }] = await Promise.all([
@@ -249,13 +251,18 @@ export default function MemoriesScreen() {
         if (!sCoverMap[p.album_id]) sCoverMap[p.album_id] = p.image_url
         sCountMap[p.album_id] = (sCountMap[p.album_id] ?? 0) + 1
       }
-      setSharedAlbums((saData ?? []).map(a => ({
-        id: a.id,
-        title: a.title,
-        coverUrl: sCoverMap[a.id] ?? null,
-        photoCount: sCountMap[a.id] ?? 0,
-        shareId: shareMap[a.id],
-      })))
+      setSharedAlbums((saData ?? []).map(a => {
+        const sm = shareMap[a.id]
+        return {
+          id: a.id,
+          title: a.title,
+          coverUrl: sCoverMap[a.id] ?? null,
+          photoCount: sCountMap[a.id] ?? 0,
+          shareId: sm.shareId,
+          bookshelfId: sm.bookshelfId,
+          bookshelfTitle: sm.bookshelfId ? (shelfMap[sm.bookshelfId] ?? null) : null,
+        }
+      }))
     } else {
       setSharedAlbums([])
     }
@@ -325,6 +332,28 @@ export default function MemoriesScreen() {
     }
   }
 
+  const handleMoveSharedToBookshelf = async (bookshelfId: string) => {
+    if (!sharedMoveTarget) return
+    setMoving(true)
+    try {
+      await supabase
+        .from('album_shares')
+        .update({ recipient_bookshelf_id: bookshelfId })
+        .eq('id', sharedMoveTarget.shareId)
+      const shelf = allShelves.find(s => s.id === bookshelfId)
+      setSharedAlbums(prev => prev.map(a =>
+        a.id === sharedMoveTarget.id
+          ? { ...a, bookshelfId: bookshelfId, bookshelfTitle: shelf?.title ?? null }
+          : a
+      ))
+      setSharedMoveTarget(null)
+    } catch {
+      Alert.alert('エラー', '移動に失敗しました。もう一度お試しください。')
+    } finally {
+      setMoving(false)
+    }
+  }
+
   const handleAlbumLongPress = (album: AlbumPreview) => {
     const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [
       { text: '共有する', onPress: () => setShareTarget(album) },
@@ -352,32 +381,52 @@ export default function MemoriesScreen() {
   }
 
   const handleSharedAlbumLongPress = (album: SharedAlbumPreview) => {
-    Alert.alert(album.title, '', [
+    const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [
       {
-        text: '共有を外す',
-        style: 'destructive',
-        onPress: () => Alert.alert(
-          '共有を外しますか？',
-          `「${album.title}」の共有を解除します。`,
-          [
-            { text: 'キャンセル', style: 'cancel' },
-            {
-              text: '共有を外す',
-              style: 'destructive',
-              onPress: async () => {
-                try {
-                  await supabase.from('album_shares').delete().eq('id', album.shareId)
-                  setSharedAlbums(prev => prev.filter(a => a.id !== album.id))
-                } catch {
-                  Alert.alert('エラー', '操作に失敗しました。もう一度お試しください。')
-                }
-              },
-            },
-          ]
-        ),
+        text: album.bookshelfId ? '別の本棚に移動' : '本棚に移動',
+        onPress: () => setSharedMoveTarget(album),
       },
-      { text: 'キャンセル', style: 'cancel' },
-    ])
+    ]
+    if (album.bookshelfId) {
+      options.push({
+        text: '本棚から外す',
+        onPress: async () => {
+          try {
+            await supabase.from('album_shares').update({ recipient_bookshelf_id: null }).eq('id', album.shareId)
+            setSharedAlbums(prev => prev.map(a =>
+              a.id === album.id ? { ...a, bookshelfId: null, bookshelfTitle: null } : a
+            ))
+          } catch {
+            Alert.alert('エラー', '操作に失敗しました。')
+          }
+        },
+      })
+    }
+    options.push({
+      text: '共有を外す',
+      style: 'destructive',
+      onPress: () => Alert.alert(
+        '共有を外しますか？',
+        `「${album.title}」の共有を解除します。`,
+        [
+          { text: 'キャンセル', style: 'cancel' },
+          {
+            text: '共有を外す',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await supabase.from('album_shares').delete().eq('id', album.shareId)
+                setSharedAlbums(prev => prev.filter(a => a.id !== album.id))
+              } catch {
+                Alert.alert('エラー', '操作に失敗しました。もう一度お試しください。')
+              }
+            },
+          },
+        ]
+      ),
+    })
+    options.push({ text: 'キャンセル', style: 'cancel' })
+    Alert.alert(album.title, '', options)
   }
 
   const handleShelfLongPress = (shelf: ShelfPreview) => {
@@ -540,7 +589,9 @@ export default function MemoriesScreen() {
                 )}
                 <View style={styles.albumInfo}>
                   <Text style={styles.albumTitle} numberOfLines={1}>{a.title}</Text>
-                  <Text style={styles.albumMeta}>{a.photoCount}枚 · 共有</Text>
+                  <Text style={styles.albumMeta}>
+                    {a.photoCount}枚 · 共有{a.bookshelfTitle ? ` · ${a.bookshelfTitle}` : ''}
+                  </Text>
                 </View>
                 <Text style={styles.chevron}>›</Text>
               </TouchableOpacity>
@@ -597,45 +648,50 @@ export default function MemoriesScreen() {
     />
 
     <Modal
-      visible={moveTarget !== null}
+      visible={moveTarget !== null || sharedMoveTarget !== null}
       animationType="fade"
       transparent
-      onRequestClose={() => setMoveTarget(null)}
+      onRequestClose={() => { setMoveTarget(null); setSharedMoveTarget(null) }}
     >
-      <Pressable style={styles.overlay} onPress={() => setMoveTarget(null)}>
-        <Pressable style={styles.pickerModal}>
-          <View style={styles.pickerHeader}>
-            <Text style={styles.pickerTitle}>本棚を選ぶ</Text>
-            <TouchableOpacity onPress={() => setMoveTarget(null)}>
-              <Text style={styles.pickerCancel}>キャンセル</Text>
-            </TouchableOpacity>
-          </View>
-          {allShelves.length === 0 ? (
-            <View style={styles.pickerEmpty}>
-              <Text style={styles.emptyHintText}>
-                本棚がありません。{'\n'}先に本棚を作成してください。
-              </Text>
-            </View>
-          ) : (
-            allShelves.map(shelf => (
-              <TouchableOpacity
-                key={shelf.id}
-                style={[
-                  styles.pickerRow,
-                  moveTarget?.bookshelfId === shelf.id && styles.pickerRowActive,
-                ]}
-                onPress={() => handleMoveToBookshelf(shelf.id)}
-                disabled={moving}
-              >
-                <Text style={styles.pickerRowText}>{shelf.title}</Text>
-                {moveTarget?.bookshelfId === shelf.id && (
-                  <Text style={styles.pickerRowSub}>現在</Text>
-                )}
-              </TouchableOpacity>
-            ))
-          )}
-        </Pressable>
-      </Pressable>
+      {(() => {
+        const activeBookshelfId = moveTarget?.bookshelfId ?? sharedMoveTarget?.bookshelfId ?? null
+        const handlePick = (shelfId: string) =>
+          moveTarget ? handleMoveToBookshelf(shelfId) : handleMoveSharedToBookshelf(shelfId)
+        const handleClose = () => { setMoveTarget(null); setSharedMoveTarget(null) }
+        return (
+          <Pressable style={styles.overlay} onPress={handleClose}>
+            <Pressable style={styles.pickerModal}>
+              <View style={styles.pickerHeader}>
+                <Text style={styles.pickerTitle}>本棚を選ぶ</Text>
+                <TouchableOpacity onPress={handleClose}>
+                  <Text style={styles.pickerCancel}>キャンセル</Text>
+                </TouchableOpacity>
+              </View>
+              {allShelves.length === 0 ? (
+                <View style={styles.pickerEmpty}>
+                  <Text style={styles.emptyHintText}>
+                    本棚がありません。{'\n'}先に本棚を作成してください。
+                  </Text>
+                </View>
+              ) : (
+                allShelves.map(shelf => (
+                  <TouchableOpacity
+                    key={shelf.id}
+                    style={[styles.pickerRow, activeBookshelfId === shelf.id && styles.pickerRowActive]}
+                    onPress={() => handlePick(shelf.id)}
+                    disabled={moving}
+                  >
+                    <Text style={styles.pickerRowText}>{shelf.title}</Text>
+                    {activeBookshelfId === shelf.id && (
+                      <Text style={styles.pickerRowSub}>現在</Text>
+                    )}
+                  </TouchableOpacity>
+                ))
+              )}
+            </Pressable>
+          </Pressable>
+        )
+      })()}
     </Modal>
     </>
   )

@@ -7,31 +7,33 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
-  TextInput,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  Dimensions,
+  Pressable,
+  PanResponder,
 } from 'react-native'
+import TextEditorModal from '../../components/TextEditorModal'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as Location from 'expo-location'
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import * as FileSystem from 'expo-file-system/legacy'
 import { decode } from 'base64-arraybuffer'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../../theme'
 import type { HomeStackParamList } from '../../types'
-
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-  error: '#C0392B',
-  followUpBg: '#F0EDE8',
-}
 
 const UNLOCK_RADIUS_M = 100
 const UNLOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+const MAX_ZOOM_FACTOR = 10
+const factorToZoom = (f: number) => (f - 1) / (MAX_ZOOM_FACTOR - 1)
+function formatFactor(f: number): string {
+  const r = Math.round(f * 10) / 10
+  return Number.isInteger(r) ? `${r}×` : `${r.toFixed(1)}×`
+}
 
 type UnlockRoute = RouteProp<HomeStackParamList, 'UnlockCamera'>
 type UnlockNav = NativeStackNavigationProp<HomeStackParamList, 'UnlockCamera'>
@@ -51,7 +53,7 @@ type UnlockEntry = {
   message: { id: string; content: string } | null
 }
 
-type Step = 'loading' | 'tooFar' | 'ready' | 'checking' | 'unlocked' | 'failed'
+type Step = 'loading' | 'tooFar' | 'ready' | 'checking' | 'unlocked' | 'failed' | 'memoryCapture'
 
 function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371000
@@ -62,6 +64,12 @@ function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): num
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLon / 2) ** 2
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function formatDate(d: string): string {
+  return new Date(d).toLocaleDateString('ja-JP', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  })
 }
 
 export default function UnlockCameraScreen() {
@@ -83,12 +91,49 @@ export default function UnlockCameraScreen() {
   const [currentUnlockRecordId, setCurrentUnlockRecordId] = useState<string | null>(null)
   const [newFollowUp, setNewFollowUp] = useState('')
   const [saving, setSaving] = useState(false)
+  const [memoryImageUrl, setMemoryImageUrl] = useState<string | null>(null)
+  const [memoryCapturing, setMemoryCapturing] = useState(false)
+  const [showEditor, setShowEditor] = useState(false)
+  const [showRefFull, setShowRefFull] = useState(false)
+
+  const [facing, setFacing] = useState<'front' | 'back'>('back')
+  const [zoomFactor, setZoomFactor] = useState(1)
+  const zoomFactorRef = useRef(1)
+  const pinchRef = useRef<{ distance: number; baseFactor: number } | null>(null)
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (e) => e.nativeEvent.touches.length === 2,
+      onMoveShouldSetPanResponder: (e) => e.nativeEvent.touches.length === 2,
+      onPanResponderGrant: (e) => {
+        const t = e.nativeEvent.touches
+        if (t.length === 2) {
+          const dx = t[0].pageX - t[1].pageX
+          const dy = t[0].pageY - t[1].pageY
+          pinchRef.current = { distance: Math.sqrt(dx * dx + dy * dy), baseFactor: zoomFactorRef.current }
+        }
+      },
+      onPanResponderMove: (e) => {
+        const t = e.nativeEvent.touches
+        if (t.length === 2 && pinchRef.current) {
+          const dx = t[0].pageX - t[1].pageX
+          const dy = t[0].pageY - t[1].pageY
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          const scale = dist / pinchRef.current.distance
+          const newFactor = Math.max(1, Math.min(MAX_ZOOM_FACTOR, pinchRef.current.baseFactor * scale))
+          zoomFactorRef.current = newFactor
+          setZoomFactor(newFactor)
+        }
+      },
+      onPanResponderRelease: () => { pinchRef.current = null },
+      onPanResponderTerminate: () => { pinchRef.current = null },
+    })
+  ).current
 
   const fetchUnlockEntries = useCallback(async (pid: string, uid: string) => {
     const [{ data: unlockData }, { data: msgData }] = await Promise.all([
       supabase
         .from('unlock_records')
-        .select('id, unlocked_at')
+        .select('id, unlocked_at, memory_image_url')
         .eq('user_id', uid)
         .eq('photo_id', pid)
         .order('unlocked_at', { ascending: true }),
@@ -116,6 +161,11 @@ export default function UnlockCameraScreen() {
     const active = entries.find(e => e.isActive)
     setCurrentUnlockRecordId(active?.unlockRecordId ?? null)
     setNewFollowUp(active?.message?.content ?? '')
+
+    const activeRaw = (unlockData ?? []).find(u =>
+      now - new Date(u.unlocked_at).getTime() <= UNLOCK_WINDOW_MS
+    )
+    setMemoryImageUrl(activeRaw?.memory_image_url ?? null)
   }, [])
 
   const init = useCallback(async () => {
@@ -231,19 +281,20 @@ export default function UnlockCameraScreen() {
     }
   }
 
-  const handleSaveFollowUp = async () => {
-    if (!newFollowUp.trim() || !photo || !userId || !currentUnlockRecordId) return
+  const handleSaveFollowUp = async (textArg?: string) => {
+    const content = (textArg ?? newFollowUp).trim()
+    if (!content || !photo || !userId || !currentUnlockRecordId) return
     setSaving(true)
     try {
       const activeEntry = unlockEntries.find(e => e.isActive)
       const existingMsg = activeEntry?.message ?? null
 
       if (existingMsg) {
-        await supabase.from('messages').update({ content: newFollowUp.trim() }).eq('id', existingMsg.id)
+        await supabase.from('messages').update({ content }).eq('id', existingMsg.id)
       } else {
         await supabase.from('messages').insert({
           photo_id: photo.id,
-          content: newFollowUp.trim(),
+          content,
           author_id: userId,
           is_original: false,
           unlock_record_id: currentUnlockRecordId,
@@ -251,54 +302,84 @@ export default function UnlockCameraScreen() {
       }
       await fetchUnlockEntries(photo.id, userId)
     } catch {
-      // noop — user can retry
+      // noop
     } finally {
       setSaving(false)
     }
   }
 
-  // --- Loading ---
+  const handleMemoryCapture = async () => {
+    if (!cameraRef.current || memoryCapturing || !currentUnlockRecordId || !userId) return
+    setMemoryCapturing(true)
+    try {
+      const taken = await cameraRef.current.takePictureAsync({ quality: 0.8 })
+      if (!taken) throw new Error('撮影に失敗しました')
+
+      const fileUri = taken.uri.startsWith('file://') ? taken.uri : `file://${taken.uri}`
+      const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: 'base64' })
+      const memPath = `unlocks/memory/${userId}/${currentUnlockRecordId}-${Date.now()}.jpg`
+
+      const { error: uploadError } = await supabase.storage
+        .from('photos')
+        .upload(memPath, decode(base64), { contentType: 'image/jpeg' })
+      if (uploadError) throw uploadError
+
+      const { data: { publicUrl } } = supabase.storage.from('photos').getPublicUrl(memPath)
+
+      await supabase.from('unlock_records')
+        .update({ memory_image_url: publicUrl })
+        .eq('id', currentUnlockRecordId)
+
+      setMemoryImageUrl(publicUrl)
+      setStep('unlocked')
+    } catch {
+      setStep('unlocked')
+    } finally {
+      setMemoryCapturing(false)
+    }
+  }
+
   if (step === 'loading') {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={COLORS.accent} size="large" />
-        <Text style={styles.subtext}>確認中…</Text>
+        <Text style={styles.subtext}>確かめています…</Text>
       </View>
     )
   }
 
-  // --- Too far ---
   if (step === 'tooFar') {
     return (
       <View style={styles.center}>
         {photo && <Image source={{ uri: photo.image_url }} style={styles.hintImage} resizeMode="cover" />}
         <Text style={styles.sectionTitle}>この場所に近づいてください</Text>
-        <Text style={styles.distanceText}>現在の距離: {distance}m（{UNLOCK_RADIUS_M}m 以内で解除可能）</Text>
+        <Text style={styles.distanceText}>
+          現在の距離 <Text style={styles.distanceNum}>{distance}m</Text>
+          {'\n'}（{UNLOCK_RADIUS_M}m 以内で解錠できます）
+        </Text>
         <TouchableOpacity style={styles.primaryButton} onPress={init}>
-          <Text style={styles.primaryButtonText}>現在地を再確認する</Text>
+          <Text style={styles.primaryButtonText}>現在地を確かめなおす</Text>
         </TouchableOpacity>
       </View>
     )
   }
 
-  // --- AI checking ---
   if (step === 'checking') {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={COLORS.accent} size="large" />
-        <Text style={styles.subtext}>AIが場所を確認しています…</Text>
+        <Text style={styles.subtext}>同じ風景か確かめています…</Text>
       </View>
     )
   }
 
-  // --- Unlocked ---
   if (step === 'unlocked' && photo) {
     const activeEntry = unlockEntries.find(e => e.isActive)
     const pastEntries = unlockEntries.filter(e => !e.isActive && e.message)
 
     return (
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: COLORS.paper }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView
@@ -310,7 +391,11 @@ export default function UnlockCameraScreen() {
 
             <View>
               <Text style={styles.sectionLabel}>思い出のメッセージ</Text>
-              <Text style={styles.unlockedMessage}>{photo.message ?? '（メッセージなし）'}</Text>
+              <View style={styles.quoteWrap}>
+                <Text style={styles.quoteOpen}>「</Text>
+                <Text style={styles.unlockedMessage}>{photo.message ?? '（メッセージなし）'}</Text>
+                <Text style={styles.quoteClose}>」</Text>
+              </View>
             </View>
 
             {pastEntries.length > 0 && (
@@ -318,44 +403,44 @@ export default function UnlockCameraScreen() {
                 <Text style={styles.sectionLabel}>過去の訪問</Text>
                 {pastEntries.map(e => (
                   <View key={e.unlockRecordId} style={styles.followUpItem}>
-                    <Text style={styles.followUpDate}>
-                      {new Date(e.unlockedAt).toLocaleDateString('ja-JP', {
-                        year: 'numeric', month: 'long', day: 'numeric',
-                      })}
-                    </Text>
+                    <Text style={styles.followUpDate}>{formatDate(e.unlockedAt)}</Text>
                     <Text style={styles.followUpContent}>{e.message!.content}</Text>
                   </View>
                 ))}
               </View>
             )}
 
-            {currentUnlockRecordId && (
+            {currentUnlockRecordId && activeEntry && (
               <View style={styles.appendSection}>
                 <Text style={styles.sectionLabel}>
-                  {activeEntry && new Date(activeEntry.unlockedAt).toLocaleDateString('ja-JP', {
-                    year: 'numeric', month: 'long', day: 'numeric',
-                  })} の記録
+                  {formatDate(activeEntry.unlockedAt)} の記録
                 </Text>
-                <TextInput
-                  style={styles.appendInput}
-                  value={newFollowUp}
-                  onChangeText={setNewFollowUp}
-                  placeholder="今の気持ちを書き留めておく…"
-                  placeholderTextColor={COLORS.subtext}
-                  multiline
-                  textAlignVertical="top"
-                />
+
+                {memoryImageUrl ? (
+                  <Image source={{ uri: memoryImageUrl }} style={styles.memoryThumb} resizeMode="cover" />
+                ) : (
+                  <TouchableOpacity style={styles.addPhotoBtn} onPress={() => setStep('memoryCapture')} activeOpacity={0.7}>
+                    <Ionicons name="camera-outline" size={16} color={COLORS.accent} />
+                    <Text style={styles.addPhotoBtnText}>写真を残す</Text>
+                  </TouchableOpacity>
+                )}
+
                 <TouchableOpacity
-                  style={[styles.primaryButton, (!newFollowUp.trim() || saving) && styles.buttonDisabled]}
-                  onPress={handleSaveFollowUp}
-                  disabled={!newFollowUp.trim() || saving}
+                  style={styles.textTapArea}
+                  onPress={() => setShowEditor(true)}
+                  activeOpacity={0.7}
                 >
-                  {saving
-                    ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={styles.primaryButtonText}>
-                        {activeEntry?.message ? '更新する' : '保存する'}
-                      </Text>
-                  }
+                  {newFollowUp ? (
+                    <Text style={styles.textPreview}>{newFollowUp}</Text>
+                  ) : (
+                    <Text style={styles.textPlaceholder}>今の気持ちを書き留めておく…</Text>
+                  )}
+                  <View style={styles.pencilWrap}>
+                    {saving
+                      ? <ActivityIndicator size="small" color={COLORS.inkSoft} />
+                      : <Ionicons name="pencil-outline" size={13} color={COLORS.inkSoft} />
+                    }
+                  </View>
                 </TouchableOpacity>
               </View>
             )}
@@ -366,11 +451,24 @@ export default function UnlockCameraScreen() {
 
           </View>
         </ScrollView>
+
+        <TextEditorModal
+          visible={showEditor}
+          title="今の気持ち"
+          placeholder="今の気持ちを書き留めておく…"
+          initialValue={newFollowUp}
+          onSave={(text) => {
+            setNewFollowUp(text)
+            setShowEditor(false)
+            if (text.trim()) handleSaveFollowUp(text)
+          }}
+          onCancel={() => setShowEditor(false)}
+          saving={saving}
+        />
       </KeyboardAvoidingView>
     )
   }
 
-  // --- Failed ---
   if (step === 'failed') {
     return (
       <View style={styles.center}>
@@ -379,13 +477,50 @@ export default function UnlockCameraScreen() {
           <Text style={styles.primaryButtonText}>もう一度試す</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.linkText}>マップに戻る</Text>
+          <Text style={styles.linkText}>地図に戻る</Text>
         </TouchableOpacity>
       </View>
     )
   }
 
-  // --- Ready: camera ---
+  if (step === 'memoryCapture') {
+    return (
+      <View style={styles.container} {...panResponder.panHandlers}>
+        <CameraView style={styles.camera} facing={facing} zoom={factorToZoom(zoomFactor)} ref={cameraRef} />
+        <View style={styles.hintBanner}>
+          <Text style={styles.hintBannerText}>今の景色を残す（任意）</Text>
+        </View>
+        <TouchableOpacity style={styles.memoryCancelBtn} onPress={() => setStep('unlocked')}>
+          <Ionicons name="close" size={28} color={COLORS.paper} />
+        </TouchableOpacity>
+        <View style={styles.controls}>
+          <Text style={styles.zoomDisplay}>{formatFactor(zoomFactor)}</Text>
+          <View style={styles.shutterRow}>
+            <View style={styles.shutterSide} />
+            <TouchableOpacity
+              style={[styles.shutter, memoryCapturing && styles.shutterDisabled]}
+              onPress={handleMemoryCapture}
+              disabled={memoryCapturing}
+            >
+              {memoryCapturing
+                ? <ActivityIndicator color={COLORS.white} size="small" />
+                : <View style={styles.shutterInner} />
+              }
+            </TouchableOpacity>
+            <View style={styles.shutterSide}>
+              <TouchableOpacity
+                style={styles.flipButton}
+                onPress={() => setFacing(f => f === 'back' ? 'front' : 'back')}
+              >
+                <Ionicons name="camera-reverse-outline" size={28} color={COLORS.paper} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    )
+  }
+
   if (!cameraPermission?.granted) {
     return (
       <View style={styles.center}>
@@ -397,29 +532,60 @@ export default function UnlockCameraScreen() {
     )
   }
 
+  const { width: SW, height: SH } = Dimensions.get('window')
+
   return (
-    <View style={styles.container}>
-      <CameraView style={styles.camera} facing="back" ref={cameraRef} />
+    <View style={styles.container} {...panResponder.panHandlers}>
+      <Modal visible={showRefFull} transparent animationType="fade" onRequestClose={() => setShowRefFull(false)}>
+        <Pressable style={styles.refFullScreen} onPress={() => setShowRefFull(false)}>
+          {photo && (
+            <Image source={{ uri: photo.image_url }} style={{ width: SW, height: SH }} resizeMode="contain" />
+          )}
+          <TouchableOpacity style={styles.refFullCloseBtn} onPress={() => setShowRefFull(false)}>
+            <Ionicons name="close" size={26} color={COLORS.paper} />
+          </TouchableOpacity>
+        </Pressable>
+      </Modal>
+
+      <CameraView style={styles.camera} facing={facing} zoom={factorToZoom(zoomFactor)} ref={cameraRef} />
 
       {photo && (
-        <Image source={{ uri: photo.image_url }} style={styles.referenceImage} resizeMode="cover" />
+        <TouchableOpacity
+          style={styles.referenceImage}
+          onPress={() => setShowRefFull(true)}
+          activeOpacity={0.85}
+        >
+          <Image source={{ uri: photo.image_url }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+        </TouchableOpacity>
       )}
 
       <View style={styles.hintBanner}>
-        <Text style={styles.hintBannerText}>同じ場所から撮影してロック解除</Text>
+        <Text style={styles.hintBannerText}>同じ風景を撮ってロックを解錠</Text>
       </View>
 
       <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.shutter, capturing && styles.shutterDisabled]}
-          onPress={handleCapture}
-          disabled={capturing}
-        >
-          {capturing
-            ? <ActivityIndicator color="#fff" size="small" />
-            : <View style={styles.shutterInner} />
-          }
-        </TouchableOpacity>
+        <Text style={styles.zoomDisplay}>{formatFactor(zoomFactor)}</Text>
+        <View style={styles.shutterRow}>
+          <View style={styles.shutterSide} />
+          <TouchableOpacity
+            style={[styles.shutter, capturing && styles.shutterDisabled]}
+            onPress={handleCapture}
+            disabled={capturing}
+          >
+            {capturing
+              ? <ActivityIndicator color={COLORS.white} size="small" />
+              : <View style={styles.shutterInner} />
+            }
+          </TouchableOpacity>
+          <View style={styles.shutterSide}>
+            <TouchableOpacity
+              style={styles.flipButton}
+              onPress={() => setFacing(f => f === 'back' ? 'front' : 'back')}
+            >
+              <Ionicons name="camera-reverse-outline" size={28} color={COLORS.paper} />
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
     </View>
   )
@@ -431,112 +597,269 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.background,
-    paddingHorizontal: 32,
-    gap: 16,
+    backgroundColor: COLORS.paper,
+    paddingHorizontal: SPACING.xxxl,
+    gap: SPACING.lg,
   },
-  subtext: { color: COLORS.subtext, fontSize: 13 },
-  sectionTitle: { fontSize: 17, color: COLORS.text, fontWeight: '600', textAlign: 'center' },
+  subtext: { ...TYPE.caption, color: COLORS.inkSoft },
+  sectionTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 18,
+    color: COLORS.ink,
+    textAlign: 'center',
+  },
   sectionLabel: {
-    fontSize: 11,
-    color: COLORS.subtext,
-    letterSpacing: 1,
+    ...TYPE.meta,
+    marginBottom: SPACING.xs,
     textTransform: 'uppercase',
-    marginBottom: 6,
   },
-  distanceText: { fontSize: 13, color: COLORS.subtext, textAlign: 'center' },
-  errorText: { fontSize: 14, color: COLORS.error, textAlign: 'center', lineHeight: 22 },
-  linkText: { fontSize: 13, color: COLORS.subtext, textDecorationLine: 'underline' },
-  hintImage: { width: '100%', height: 200, borderRadius: 8 },
+  distanceText: { ...TYPE.caption, textAlign: 'center', lineHeight: 22 },
+  distanceNum: {
+    fontFamily: FONTS.serif,
+    fontSize: 16,
+    color: COLORS.ink,
+  },
+  errorText: {
+    ...TYPE.body,
+    color: COLORS.danger,
+    textAlign: 'center',
+  },
+  linkText: {
+    ...TYPE.caption,
+    color: COLORS.inkSub,
+    textDecorationLine: 'underline',
+  },
+  hintImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+  },
   primaryButton: {
     backgroundColor: COLORS.accent,
-    paddingHorizontal: 32,
-    paddingVertical: 13,
-    borderRadius: 4,
+    paddingHorizontal: SPACING.xxl,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.thumb,
     alignItems: 'center',
   },
   buttonDisabled: { opacity: 0.45 },
-  primaryButtonText: { color: '#fff', fontSize: 14, letterSpacing: 1 },
+  primaryButtonText: {
+    color: COLORS.white,
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    letterSpacing: 1,
+  },
+
   camera: { flex: 1 },
   referenceImage: {
     position: 'absolute',
-    top: 16,
-    right: 16,
-    width: 90,
-    height: 60,
-    borderRadius: 6,
+    top: SPACING.lg,
+    right: SPACING.lg,
+    width: 96,
+    height: 64,
+    borderRadius: RADIUS.thumb,
     borderWidth: 2,
-    borderColor: '#fff',
-    opacity: 0.85,
+    borderColor: COLORS.paper,
+    opacity: 0.92,
   },
   hintBanner: {
     position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 120,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    top: SPACING.lg,
+    left: SPACING.lg,
+    right: 128,
+    backgroundColor: 'rgba(44,38,32,0.55)',
+    borderRadius: RADIUS.thumb,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
   },
-  hintBannerText: { color: '#fff', fontSize: 12 },
+  hintBannerText: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.paper,
+  },
   controls: {
     position: 'absolute',
-    bottom: 48,
+    bottom: SPACING.huge,
     left: 0,
     right: 0,
     alignItems: 'center',
+    gap: SPACING.md,
+  },
+  zoomDisplay: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.paper,
+    letterSpacing: 0.5,
+    backgroundColor: 'rgba(80,80,80,0.6)',
+    borderRadius: 20,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    overflow: 'hidden',
+    textAlign: 'center',
+  },
+  shutterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    paddingHorizontal: SPACING.xxxl,
+  },
+  shutterSide: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  flipButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   shutter: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 4,
-    borderColor: '#fff',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 3,
+    borderColor: COLORS.paper,
     alignItems: 'center',
     justifyContent: 'center',
   },
   shutterDisabled: { opacity: 0.5 },
   shutterInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#fff',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.paper,
   },
-  unlockedContainer: { backgroundColor: COLORS.background, flexGrow: 1 },
-  unlockedImage: { width: '100%', height: 300 },
-  unlockedBody: { padding: 24, gap: 20 },
-  unlockedMessage: { fontSize: 16, color: COLORS.text, lineHeight: 28 },
+
+  unlockedContainer: { backgroundColor: COLORS.paper, flexGrow: 1 },
+  unlockedImage: { width: '100%', height: 320 },
+  unlockedBody: { padding: SPACING.xl, paddingBottom: SPACING.huge, gap: SPACING.xxl },
+  quoteWrap: { marginTop: SPACING.xs },
+  quoteOpen: {
+    fontFamily: FONTS.serif,
+    fontSize: 24,
+    color: COLORS.inkSub,
+    lineHeight: 24,
+    marginBottom: -6,
+  },
+  quoteClose: {
+    fontFamily: FONTS.serif,
+    fontSize: 24,
+    color: COLORS.inkSub,
+    lineHeight: 24,
+    textAlign: 'right',
+    marginTop: -6,
+  },
+  unlockedMessage: {
+    ...TYPE.bodySerif,
+    fontSize: 17,
+    paddingHorizontal: SPACING.md,
+  },
   followUpSection: {
-    gap: 8,
-    paddingTop: 4,
+    gap: SPACING.sm,
+    paddingTop: SPACING.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: COLORS.border,
+    borderTopColor: COLORS.rule,
   },
   followUpItem: {
-    backgroundColor: COLORS.followUpBg,
-    borderRadius: 8,
-    padding: 12,
-    gap: 4,
+    backgroundColor: COLORS.paperDeep,
+    padding: SPACING.md,
+    gap: SPACING.xs,
+    borderLeftWidth: 2,
+    borderLeftColor: COLORS.rule,
   },
-  followUpDate: { fontSize: 11, color: COLORS.subtext },
-  followUpContent: { fontSize: 14, color: COLORS.text, lineHeight: 22 },
-  appendSection: {
-    gap: 10,
-    paddingTop: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: COLORS.border,
+  followUpDate: {
+    fontFamily: FONTS.serif,
+    fontSize: 13,
+    color: COLORS.inkSub,
   },
-  appendInput: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    padding: 12,
+  followUpContent: {
+    ...TYPE.body,
     fontSize: 14,
-    color: COLORS.text,
-    minHeight: 100,
-    backgroundColor: '#fff',
+    lineHeight: 22,
   },
-  closeButton: { alignItems: 'center', paddingVertical: 4 },
-  closeButtonText: { fontSize: 13, color: COLORS.subtext, textDecorationLine: 'underline' },
+  appendSection: {
+    gap: SPACING.md,
+    paddingTop: SPACING.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.rule,
+  },
+  textTapArea: {
+    minHeight: 90,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.rule,
+    borderRadius: RADIUS.thumb,
+    padding: SPACING.md,
+    backgroundColor: COLORS.white,
+  },
+  textPreview: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    color: COLORS.ink,
+    lineHeight: 26,
+  },
+  textPlaceholder: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    color: COLORS.inkSoft,
+    fontStyle: 'italic',
+  },
+  pencilWrap: {
+    position: 'absolute',
+    top: SPACING.sm,
+    right: SPACING.sm,
+  },
+  closeButton: { alignItems: 'center', paddingVertical: SPACING.xs },
+  closeButtonText: {
+    ...TYPE.caption,
+    color: COLORS.inkSub,
+    textDecorationLine: 'underline',
+  },
+
+  memoryThumb: {
+    width: '100%',
+    height: 200,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+  },
+  addPhotoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.accent,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.white,
+  },
+  addPhotoBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    color: COLORS.accent,
+    letterSpacing: 0.3,
+  },
+  memoryCancelBtn: {
+    position: 'absolute',
+    top: SPACING.xl,
+    left: SPACING.lg,
+    padding: SPACING.sm,
+  },
+
+  refFullScreen: {
+    flex: 1,
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refFullCloseBtn: {
+    position: 'absolute',
+    top: SPACING.xxl + 16,
+    right: SPACING.xl,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    padding: SPACING.sm,
+  },
 })

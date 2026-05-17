@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
   Text,
-  FlatList,
+  ScrollView,
   Image,
   TouchableOpacity,
   StyleSheet,
@@ -16,20 +16,13 @@ import { useNavigation } from '@react-navigation/native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
 import { deletePhoto } from '../../lib/photoDelete'
-import type { TmpStackParamList } from '../../types'
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../../theme'
+import type { MemoriesStackParamList } from '../../types'
 
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-  warning: '#E67E22',
-}
+const SCREEN_WIDTH = Dimensions.get('window').width
+const PHOTO_SIZE = SCREEN_WIDTH - SPACING.xl * 2
 
-const ITEM_SIZE = (Dimensions.get('window').width - 48) / 2
-
-type Nav = NativeStackNavigationProp<TmpStackParamList, 'TmpAlbum'>
+type Nav = NativeStackNavigationProp<MemoriesStackParamList, 'TmpAll'>
 
 type TmpPhoto = {
   id: string
@@ -40,6 +33,10 @@ type TmpPhoto = {
 function daysRemaining(takenAt: string): number {
   const expires = new Date(takenAt).getTime() + 3 * 24 * 60 * 60 * 1000
   return Math.max(0, Math.ceil((expires - Date.now()) / (1000 * 60 * 60 * 24)))
+}
+
+function formatDate(d: string): string {
+  return new Date(d).toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
 export default function TmpAlbumScreen() {
@@ -118,75 +115,94 @@ export default function TmpAlbumScreen() {
     )
   }
 
+  if (photos.length === 0) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.emptyText}>現像待ちの写真はありません</Text>
+        <Text style={styles.emptySubtext}>カメラで撮影した写真は、3日以内にメッセージを残してください。</Text>
+      </View>
+    )
+  }
+
   return (
-    <View style={styles.container}>
-      {photos.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyText}>現像待ちの写真はありません</Text>
-          <Text style={styles.emptySubtext}>カメラで写真を撮るとここに表示されます</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={photos}
-          keyExtractor={item => item.id}
-          numColumns={2}
-          contentContainerStyle={styles.grid}
-          columnWrapperStyle={styles.row}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
-          }
-          renderItem={({ item }) => {
-            const days = daysRemaining(item.taken_at)
-            return (
+    <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scroll}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
+        }
+      >
+        {photos.map((p, idx) => {
+          const days = daysRemaining(p.taken_at)
+          return (
+            <View key={p.id} style={[styles.entry, idx === 0 && styles.entryFirst]}>
+              <View style={styles.dateRow}>
+                <Text style={styles.entryDate}>{formatDate(p.taken_at)}</Text>
+                <Text style={[styles.days, days <= 1 && styles.daysUrgent]}>残り {days}日</Text>
+              </View>
+
               <TouchableOpacity
-                style={styles.card}
-                onPress={() => navigation.navigate('WriteMessage', { photoId: item.id, imageUrl: item.image_url })}
-                onLongPress={() => handleDelete(item)}
-                activeOpacity={0.85}
+                onPress={() => navigation.navigate('WriteMessage', { photoId: p.id, imageUrl: p.image_url })}
+                onLongPress={() => handleDelete(p)}
+                activeOpacity={0.92}
               >
-                <Image source={{ uri: item.image_url }} style={styles.thumbnail} resizeMode="cover" />
-                <View style={[styles.badge, days <= 1 && styles.badgeUrgent]}>
-                  <Text style={styles.badgeText}>残り{days}日</Text>
-                </View>
-                <View style={styles.cardFooter}>
-                  <Text style={styles.cardHint}>タップしてメッセージを書く</Text>
-                </View>
+                <Image source={{ uri: p.image_url }} style={styles.photo} resizeMode="cover" />
               </TouchableOpacity>
-            )
-          }}
-        />
-      )}
-    </View>
+
+              <Text style={styles.hint}>タップしてメッセージを残す · 長押しで削除</Text>
+            </View>
+          )
+        })}
+      </ScrollView>
+
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  emptyText: { fontSize: 15, color: COLORS.text, marginBottom: 8, textAlign: 'center' },
-  emptySubtext: { fontSize: 13, color: COLORS.subtext, textAlign: 'center', lineHeight: 20 },
-  grid: { padding: 16 },
-  row: { justifyContent: 'space-between', marginBottom: 16 },
-  card: {
-    width: ITEM_SIZE,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  container: { flex: 1, backgroundColor: COLORS.paper },
+  scroll: { paddingTop: SPACING.lg, paddingBottom: SPACING.huge },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: SPACING.xxxl,
+    gap: SPACING.sm,
+    backgroundColor: COLORS.paper,
   },
-  thumbnail: { width: '100%', height: ITEM_SIZE },
-  badge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: COLORS.accent,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+  emptyText: { ...TYPE.body, textAlign: 'center' },
+  emptySubtext: { ...TYPE.caption, color: COLORS.inkSoft, textAlign: 'center' },
+
+  entry: {
+    paddingHorizontal: SPACING.xl,
+    paddingTop: SPACING.huge,
+    paddingBottom: SPACING.md,
   },
-  badgeUrgent: { backgroundColor: COLORS.warning },
-  badgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
-  cardFooter: { padding: 8 },
-  cardHint: { fontSize: 11, color: COLORS.subtext },
+  entryFirst: { paddingTop: SPACING.xl },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.lg,
+  },
+  entryDate: { ...TYPE.date },
+  days: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.inkSub,
+    letterSpacing: 0.5,
+  },
+  daysUrgent: { color: COLORS.seal },
+  photo: {
+    width: PHOTO_SIZE,
+    height: PHOTO_SIZE,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+  },
+  hint: {
+    ...TYPE.caption,
+    color: COLORS.inkSoft,
+    marginTop: SPACING.md,
+    fontStyle: 'italic',
+  },
+
 })

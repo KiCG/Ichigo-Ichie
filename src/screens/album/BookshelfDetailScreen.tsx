@@ -14,25 +14,32 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../../lib/supabase'
-import type { BookshelfStackParamList } from '../../types'
-
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-}
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../../theme'
+import type { MemoriesStackParamList } from '../../types'
 
 type AlbumCard = {
   id: string
   title: string
   coverUrl: string | null
   photoCount: number
+  createdAt: string
 }
 
-type Nav = NativeStackNavigationProp<BookshelfStackParamList, 'BookshelfDetail'>
-type Route = RouteProp<BookshelfStackParamList, 'BookshelfDetail'>
+type SharedAlbumCard = {
+  id: string
+  title: string
+  coverUrl: string | null
+  photoCount: number
+  shareId: string
+}
+
+type Nav = NativeStackNavigationProp<MemoriesStackParamList, 'BookshelfDetail'>
+type Route = RouteProp<MemoriesStackParamList, 'BookshelfDetail'>
+
+function formatYearMonth(d: string): string {
+  const date = new Date(d)
+  return `${date.getFullYear()}年${date.getMonth() + 1}月`
+}
 
 export default function BookshelfDetailScreen() {
   const navigation = useNavigation<Nav>()
@@ -40,6 +47,7 @@ export default function BookshelfDetailScreen() {
   const { bookshelfId } = route.params
 
   const [albums, setAlbums] = useState<AlbumCard[]>([])
+  const [sharedAlbums, setSharedAlbums] = useState<SharedAlbumCard[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -47,20 +55,35 @@ export default function BookshelfDetailScreen() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    const { data: albumData } = await supabase
-      .from('albums')
-      .select('id, title')
-      .eq('user_id', user.id)
-      .eq('bookshelf_id', bookshelfId)
-      .order('created_at', { ascending: false })
+    const [{ data: albumData }, { data: shareData }] = await Promise.all([
+      supabase
+        .from('albums')
+        .select('id, title, created_at')
+        .eq('user_id', user.id)
+        .eq('bookshelf_id', bookshelfId)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('album_shares')
+        .select('id, album_id')
+        .eq('shared_to_user_id', user.id)
+        .eq('recipient_bookshelf_id', bookshelfId),
+    ])
 
-    if (!albumData?.length) { setAlbums([]); return }
+    // Own albums
+    const albumIds = (albumData ?? []).map(a => a.id)
+    const sharedAlbumIds = (shareData ?? []).map(s => s.album_id)
+    const allIds = [...albumIds, ...sharedAlbumIds]
 
-    const albumIds = albumData.map(a => a.id)
+    if (allIds.length === 0) {
+      setAlbums([])
+      setSharedAlbums([])
+      return
+    }
+
     const { data: photoData } = await supabase
       .from('photos')
       .select('id, album_id, image_url')
-      .in('album_id', albumIds)
+      .in('album_id', allIds)
       .order('taken_at', { ascending: true })
 
     const statsMap: Record<string, { count: number; coverUrl: string | null }> = {}
@@ -70,12 +93,33 @@ export default function BookshelfDetailScreen() {
       if (!statsMap[p.album_id].coverUrl) statsMap[p.album_id].coverUrl = p.image_url
     }
 
-    setAlbums(albumData.map(a => ({
+    setAlbums((albumData ?? []).map(a => ({
       id: a.id,
       title: a.title,
       coverUrl: statsMap[a.id]?.coverUrl ?? null,
       photoCount: statsMap[a.id]?.count ?? 0,
+      createdAt: a.created_at,
     })))
+
+    if (sharedAlbumIds.length > 0) {
+      const shareMap: Record<string, string> = {}
+      for (const s of shareData ?? []) shareMap[s.album_id] = s.id
+
+      const { data: sharedAlbumData } = await supabase
+        .from('albums')
+        .select('id, title')
+        .in('id', sharedAlbumIds)
+
+      setSharedAlbums((sharedAlbumData ?? []).map(a => ({
+        id: a.id,
+        title: a.title,
+        coverUrl: statsMap[a.id]?.coverUrl ?? null,
+        photoCount: statsMap[a.id]?.count ?? 0,
+        shareId: shareMap[a.id],
+      })))
+    } else {
+      setSharedAlbums([])
+    }
   }, [bookshelfId])
 
   const isFirstLoad = useRef(true)
@@ -120,7 +164,7 @@ export default function BookshelfDetailScreen() {
         {
           text: 'アルバムを削除',
           style: 'destructive',
-          onPress: async () => {
+          onPress: () => {
             Alert.alert(
               'アルバムを削除しますか？',
               `「${album.title}」を削除します。\nアルバム内の写真は机の上に移動されます。`,
@@ -166,69 +210,170 @@ export default function BookshelfDetailScreen() {
     )
   }
 
+  if (albums.length === 0 && sharedAlbums.length === 0) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.emptyText}>この本棚にアルバムはありません</Text>
+        <Text style={styles.emptySubtext}>片付けていないアルバムをここに移動できます</Text>
+      </View>
+    )
+  }
+
+  const handleSharedAlbumLongPress = (album: SharedAlbumCard) => {
+    Alert.alert(album.title, '', [
+      {
+        text: '本棚から外す',
+        onPress: async () => {
+          try {
+            await supabase.from('album_shares').update({ recipient_bookshelf_id: null }).eq('id', album.shareId)
+            setSharedAlbums(prev => prev.filter(a => a.id !== album.id))
+          } catch {
+            Alert.alert('エラー', '操作に失敗しました。もう一度お試しください。')
+          }
+        },
+      },
+      {
+        text: '共有を外す',
+        style: 'destructive',
+        onPress: () => Alert.alert(
+          '共有を外しますか？',
+          `「${album.title}」の共有を解除します。`,
+          [
+            { text: 'キャンセル', style: 'cancel' },
+            {
+              text: '共有を外す',
+              style: 'destructive',
+              onPress: async () => {
+                try {
+                  await supabase.from('album_shares').delete().eq('id', album.shareId)
+                  setSharedAlbums(prev => prev.filter(a => a.id !== album.id))
+                } catch {
+                  Alert.alert('エラー', '操作に失敗しました。もう一度お試しください。')
+                }
+              },
+            },
+          ]
+        ),
+      },
+      { text: 'キャンセル', style: 'cancel' },
+    ])
+  }
+
   return (
     <View style={styles.container}>
-      {albums.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyText}>この本棚にアルバムはありません</Text>
-          <Text style={styles.emptySubtext}>片付けていないアルバムをここに移動できます</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={albums}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
-          }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
-              onLongPress={() => handleAlbumLongPress(item)}
-              activeOpacity={0.8}
-            >
-              {item.coverUrl ? (
-                <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
-              ) : (
-                <View style={[styles.cover, styles.coverPlaceholder]}>
-                  <Text style={styles.coverPlaceholderText}>写真なし</Text>
-                </View>
-              )}
-              <View style={styles.cardBody}>
-                <Text style={styles.albumTitle} numberOfLines={2}>{item.title}</Text>
-                <Text style={styles.photoCount}>{item.photoCount}枚</Text>
-              </View>
-            </TouchableOpacity>
-          )}
-        />
-      )}
+      <FlatList
+        data={albums}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.list}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
+        }
+        ListFooterComponent={
+          sharedAlbums.length > 0 ? (
+            <>
+              <Text style={styles.sectionDivider}>共有アルバム</Text>
+              {sharedAlbums.map((item, index) => (
+                <React.Fragment key={item.id}>
+                  {index > 0 && <View style={styles.separator} />}
+                  <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
+                    onLongPress={() => handleSharedAlbumLongPress(item)}
+                    activeOpacity={0.7}
+                  >
+                    {item.coverUrl ? (
+                      <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.cover, styles.coverPlaceholder]} />
+                    )}
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowDate}>共有アルバム</Text>
+                      <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+                      <Text style={styles.rowMeta}>{item.photoCount}枚</Text>
+                    </View>
+                    <Text style={styles.chevron}>›</Text>
+                  </TouchableOpacity>
+                </React.Fragment>
+              ))}
+            </>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => navigation.navigate('AlbumDetail', { albumId: item.id, albumTitle: item.title })}
+            onLongPress={() => handleAlbumLongPress(item)}
+            activeOpacity={0.7}
+          >
+            {item.coverUrl ? (
+              <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
+            ) : (
+              <View style={[styles.cover, styles.coverPlaceholder]} />
+            )}
+            <View style={styles.rowBody}>
+              <Text style={styles.rowDate}>{formatYearMonth(item.createdAt)}</Text>
+              <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.rowMeta}>{item.photoCount}枚</Text>
+            </View>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+        )}
+      />
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 },
-  emptyText: { fontSize: 15, color: COLORS.text, textAlign: 'center' },
-  emptySubtext: { fontSize: 13, color: COLORS.subtext, textAlign: 'center', lineHeight: 20 },
-  list: { padding: 16, gap: 12 },
-  card: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: 'hidden',
-  },
-  cover: { width: 100, height: 100 },
-  coverPlaceholder: {
-    backgroundColor: COLORS.border,
+  container: { flex: 1, backgroundColor: COLORS.paper },
+  center: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: SPACING.xxxl,
+    gap: SPACING.sm,
+    backgroundColor: COLORS.paper,
   },
-  coverPlaceholderText: { fontSize: 11, color: COLORS.subtext },
-  cardBody: { flex: 1, padding: 16, justifyContent: 'space-between' },
-  albumTitle: { fontSize: 16, color: COLORS.text, fontWeight: '500', lineHeight: 22 },
-  photoCount: { fontSize: 12, color: COLORS.subtext },
+  emptyText: { ...TYPE.body, textAlign: 'center' },
+  emptySubtext: { ...TYPE.caption, color: COLORS.inkSoft, textAlign: 'center' },
+
+  list: { paddingHorizontal: SPACING.xl, paddingTop: SPACING.lg, paddingBottom: SPACING.huge },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.md,
+    gap: SPACING.lg,
+  },
+  separator: { height: StyleSheet.hairlineWidth, backgroundColor: COLORS.rule },
+  cover: {
+    width: 64,
+    height: 64,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+  },
+  coverPlaceholder: { backgroundColor: COLORS.paperDeep },
+  rowBody: { flex: 1, gap: 2 },
+  rowDate: {
+    fontFamily: FONTS.serif,
+    fontSize: 12,
+    color: COLORS.inkSub,
+  },
+  rowTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 16,
+    color: COLORS.ink,
+  },
+  rowMeta: { ...TYPE.meta },
+  sectionDivider: {
+    ...TYPE.meta,
+    paddingHorizontal: 0,
+    marginTop: SPACING.xxl,
+    marginBottom: SPACING.sm,
+  },
+  chevron: {
+    fontFamily: FONTS.sans,
+    fontSize: 24,
+    color: COLORS.inkSoft,
+    fontWeight: '300',
+  },
 })

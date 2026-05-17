@@ -11,16 +11,8 @@ import {
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
+import { COLORS, FONTS, SPACING, RADIUS } from '../../theme'
 import type { AuthStackParamList } from '../../types'
-
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-  error: '#C0392B',
-}
 
 type Props = {
   navigation: NativeStackNavigationProp<AuthStackParamList, 'Signup'>
@@ -72,7 +64,7 @@ export default function SignupScreen({ navigation }: Props) {
           <TextInput
             style={styles.input}
             placeholder="名前"
-            placeholderTextColor={COLORS.subtext}
+            placeholderTextColor={COLORS.inkSoft}
             value={name}
             onChangeText={setName}
             autoCorrect={false}
@@ -80,7 +72,7 @@ export default function SignupScreen({ navigation }: Props) {
           <TextInput
             style={styles.input}
             placeholder="メールアドレス"
-            placeholderTextColor={COLORS.subtext}
+            placeholderTextColor={COLORS.inkSoft}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -90,7 +82,7 @@ export default function SignupScreen({ navigation }: Props) {
           <TextInput
             style={styles.input}
             placeholder="パスワード（6文字以上）"
-            placeholderTextColor={COLORS.subtext}
+            placeholderTextColor={COLORS.inkSoft}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
@@ -105,7 +97,7 @@ export default function SignupScreen({ navigation }: Props) {
             disabled={loading}
           >
             {loading
-              ? <ActivityIndicator color="#fff" />
+              ? <ActivityIndicator color={COLORS.white} />
               : <Text style={styles.buttonText}>アカウントを作成</Text>
             }
           </TouchableOpacity>
@@ -120,75 +112,73 @@ export default function SignupScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
+  container: { flex: 1, backgroundColor: COLORS.paper },
   inner: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: SPACING.xxxl,
   },
   title: {
-    fontSize: 40,
-    fontWeight: '300',
-    color: COLORS.accent,
+    fontFamily: FONTS.serif,
+    fontSize: 36,
+    color: COLORS.ink,
     letterSpacing: 8,
-    marginBottom: 8,
+    marginBottom: SPACING.sm,
   },
   subtitle: {
+    fontFamily: FONTS.serif,
     fontSize: 13,
-    color: COLORS.subtext,
+    color: COLORS.inkSub,
     letterSpacing: 2,
-    marginBottom: 48,
+    marginBottom: SPACING.huge,
   },
-  form: {
-    width: '100%',
-    marginBottom: 24,
-  },
+  form: { width: '100%', marginBottom: SPACING.xxl },
   input: {
     width: '100%',
     height: 48,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    marginBottom: 24,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.rule,
+    marginBottom: SPACING.xxl,
+    fontFamily: FONTS.sans,
     fontSize: 15,
-    color: COLORS.text,
-    paddingHorizontal: 4,
+    color: COLORS.ink,
+    paddingHorizontal: SPACING.xs,
   },
   error: {
-    color: COLORS.error,
+    color: COLORS.danger,
+    fontFamily: FONTS.sans,
     fontSize: 13,
-    marginBottom: 12,
+    marginBottom: SPACING.md,
     textAlign: 'center',
   },
   message: {
     color: COLORS.accent,
+    fontFamily: FONTS.sans,
     fontSize: 13,
-    marginBottom: 12,
+    marginBottom: SPACING.md,
     textAlign: 'center',
     lineHeight: 20,
   },
   button: {
     width: '100%',
-    height: 48,
+    height: 50,
     backgroundColor: COLORS.accent,
-    borderRadius: 4,
+    borderRadius: RADIUS.thumb,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
+    marginTop: SPACING.sm,
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
+  buttonDisabled: { opacity: 0.6 },
   buttonText: {
-    color: '#fff',
+    color: COLORS.white,
+    fontFamily: FONTS.sans,
     fontSize: 15,
     letterSpacing: 2,
   },
   link: {
-    color: COLORS.subtext,
+    color: COLORS.inkSub,
+    fontFamily: FONTS.sans,
     fontSize: 13,
     textDecorationLine: 'underline',
   },

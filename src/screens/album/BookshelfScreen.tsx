@@ -15,19 +15,13 @@ import {
 } from 'react-native'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { useFocusEffect } from '@react-navigation/native'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
-import type { BookshelfStackParamList } from '../../types'
-
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-}
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../../theme'
+import type { MemoriesStackParamList } from '../../types'
 
 type Props = {
-  navigation: NativeStackNavigationProp<BookshelfStackParamList, 'Bookshelf'>
+  navigation: NativeStackNavigationProp<MemoriesStackParamList, 'Bookshelf'>
 }
 
 type BookshelfCard = {
@@ -130,7 +124,7 @@ export default function BookshelfScreen({ navigation }: Props) {
       setBookshelves(prev => [{ id: data.id, title: data.title, albumCount: 0, coverUrl: null }, ...prev])
       setNewName('')
       setShowCreate(false)
-    } catch (e) {
+    } catch {
       Alert.alert('エラー', '作成に失敗しました。もう一度お試しください。')
     } finally {
       setCreating(false)
@@ -151,7 +145,7 @@ export default function BookshelfScreen({ navigation }: Props) {
               const { error } = await supabase.from('bookshelves').delete().eq('id', shelf.id)
               if (error) throw error
               setBookshelves(prev => prev.filter(s => s.id !== shelf.id))
-            } catch (e) {
+            } catch {
               Alert.alert('エラー', '削除に失敗しました。もう一度お試しください。')
             }
           },
@@ -178,34 +172,35 @@ export default function BookshelfScreen({ navigation }: Props) {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
         }
         ListHeaderComponent={
-          <TouchableOpacity style={styles.createBtn} onPress={() => setShowCreate(true)}>
-            <Text style={styles.createBtnText}>＋ 新しい本棚を作成</Text>
+          <TouchableOpacity style={styles.createBtn} onPress={() => setShowCreate(true)} activeOpacity={0.7}>
+            <Text style={styles.createBtnText}>＋ 新しい本棚をつくる</Text>
           </TouchableOpacity>
         }
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
-            <Text style={styles.emptyText}>本棚がありません</Text>
-            <Text style={styles.emptySubtext}>上のボタンから本棚を作成してください</Text>
+            <Text style={styles.emptyText}>本棚はまだありません</Text>
+            <Text style={styles.emptySubtext}>本棚をつくると、アルバムをまとめておけます</Text>
           </View>
         }
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={styles.card}
+            style={styles.row}
             onPress={() => navigation.navigate('BookshelfDetail', { bookshelfId: item.id, bookshelfTitle: item.title })}
-            onLongPress={() => handleDelete(item)}
-            activeOpacity={0.8}
+            activeOpacity={0.7}
           >
             {item.coverUrl ? (
               <Image source={{ uri: item.coverUrl }} style={styles.cover} resizeMode="cover" />
             ) : (
-              <View style={[styles.cover, styles.coverPlaceholder]}>
-                <Text style={styles.placeholderIcon}>📚</Text>
-              </View>
+              <View style={[styles.cover, styles.coverPlaceholder]} />
             )}
-            <View style={styles.cardBody}>
-              <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-              <Text style={styles.cardSub}>{item.albumCount}冊</Text>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.rowMeta}>{item.albumCount}冊</Text>
             </View>
+            <TouchableOpacity style={styles.moreBtn} onPress={() => handleDelete(item)} hitSlop={8}>
+              <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.inkSoft} />
+            </TouchableOpacity>
           </TouchableOpacity>
         )}
       />
@@ -213,11 +208,11 @@ export default function BookshelfScreen({ navigation }: Props) {
       <Modal visible={showCreate} animationType="fade" transparent onRequestClose={() => setShowCreate(false)}>
         <Pressable style={styles.overlay} onPress={() => setShowCreate(false)}>
           <Pressable style={styles.createModal}>
-            <Text style={styles.modalTitle}>新しい本棚を作成</Text>
+            <Text style={styles.modalTitle}>新しい本棚をつくる</Text>
             <TextInput
               style={styles.input}
               placeholder="本棚の名前"
-              placeholderTextColor={COLORS.subtext}
+              placeholderTextColor={COLORS.inkSoft}
               value={newName}
               onChangeText={setNewName}
               autoFocus
@@ -228,7 +223,7 @@ export default function BookshelfScreen({ navigation }: Props) {
               disabled={!newName.trim() || creating}
             >
               {creating
-                ? <ActivityIndicator color="#fff" size="small" />
+                ? <ActivityIndicator color={COLORS.white} size="small" />
                 : <Text style={styles.confirmBtnText}>作成する</Text>
               }
             </TouchableOpacity>
@@ -240,69 +235,99 @@ export default function BookshelfScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  list: { padding: 16, gap: 12 },
+  container: { flex: 1, backgroundColor: COLORS.paper },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.paper },
+  list: { paddingHorizontal: SPACING.xl, paddingTop: SPACING.lg, paddingBottom: SPACING.huge },
+
   createBtn: {
-    borderWidth: 1,
+    paddingVertical: SPACING.md,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: COLORS.accent,
-    borderRadius: 8,
-    paddingVertical: 12,
+    borderRadius: RADIUS.thumb,
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: SPACING.lg,
   },
-  createBtnText: { color: COLORS.accent, fontSize: 14, fontWeight: '500' },
-  card: {
+  createBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    color: COLORS.accent,
+    letterSpacing: 0.5,
+  },
+
+  row: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: 'hidden',
-  },
-  cover: { width: 100, height: 100 },
-  coverPlaceholder: {
-    backgroundColor: '#EDE8E0',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: SPACING.md,
+    gap: SPACING.lg,
   },
-  placeholderIcon: { fontSize: 28 },
-  cardBody: { flex: 1, padding: 16, justifyContent: 'space-between' },
-  cardTitle: { fontSize: 15, color: COLORS.text, fontWeight: '500', lineHeight: 21 },
-  cardSub: { fontSize: 12, color: COLORS.subtext },
-  emptyWrap: { marginTop: 32, alignItems: 'center', gap: 8 },
-  emptyText: { fontSize: 15, color: COLORS.text, textAlign: 'center' },
-  emptySubtext: { fontSize: 13, color: COLORS.subtext, textAlign: 'center', lineHeight: 20 },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: COLORS.rule,
+  },
+  cover: {
+    width: 64,
+    height: 64,
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
+  },
+  coverPlaceholder: { backgroundColor: COLORS.paperDeep },
+  rowBody: { flex: 1, gap: SPACING.xs },
+  rowTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 17,
+    color: COLORS.ink,
+  },
+  rowMeta: { ...TYPE.meta },
+  moreBtn: {
+    padding: SPACING.sm,
+    marginLeft: SPACING.xs,
+  },
+
+  emptyWrap: { paddingTop: SPACING.huge, alignItems: 'center', gap: SPACING.sm },
+  emptyText: { ...TYPE.body, textAlign: 'center' },
+  emptySubtext: { ...TYPE.caption, color: COLORS.inkSoft, textAlign: 'center' },
+
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(44,38,32,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
+    padding: SPACING.xxxl,
   },
   createModal: {
     width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    gap: 12,
+    backgroundColor: COLORS.paper,
+    borderRadius: SPACING.sm,
+    padding: SPACING.xl,
+    gap: SPACING.md,
   },
-  modalTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  modalTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 17,
+    color: COLORS.ink,
+  },
   input: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.rule,
+    borderRadius: RADIUS.thumb,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    fontFamily: FONTS.sans,
     fontSize: 14,
-    color: COLORS.text,
+    color: COLORS.ink,
+    backgroundColor: COLORS.white,
   },
   confirmBtn: {
     backgroundColor: COLORS.accent,
-    borderRadius: 8,
-    paddingVertical: 12,
+    borderRadius: RADIUS.thumb,
+    paddingVertical: SPACING.md,
     alignItems: 'center',
   },
   btnDisabled: { opacity: 0.45 },
-  confirmBtnText: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  confirmBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    color: COLORS.white,
+    letterSpacing: 1,
+  },
 })
