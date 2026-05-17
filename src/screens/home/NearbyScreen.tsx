@@ -212,19 +212,10 @@ export default function NearbyScreen({ navigation }: Props) {
         ref={mapRef}
         style={styles.map}
         initialRegion={initialRegion}
+        showsUserLocation
         showsMyLocationButton
         onRegionChangeComplete={handleRegionChangeComplete}
       >
-        {userLocation && (
-          <Marker
-            coordinate={{ latitude: userLocation.latitude, longitude: userLocation.longitude }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
-            zIndex={999}
-          >
-            <View style={styles.userDot} />
-          </Marker>
-        )}
         {displayClusters.map(feature => {
           const [lng, lat] = feature.geometry.coordinates
 
@@ -337,14 +328,6 @@ const styles = StyleSheet.create({
   loadingText: { ...TYPE.caption, color: COLORS.inkSoft },
   permissionText: { ...TYPE.body, textAlign: 'center', lineHeight: 24 },
   map: { flex: 1 },
-  userDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: 'rgba(66, 133, 244, 0.75)',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.85)',
-  },
 
   // クラスターピン（写真サムネ＋件数バッジ）
   clusterWrap: {},
