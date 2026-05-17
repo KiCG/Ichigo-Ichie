@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -12,18 +12,12 @@ import {
   Dimensions,
 } from 'react-native'
 import MapView, { Marker, Callout, Region } from 'react-native-maps'
+import Supercluster from 'supercluster'
 import * as Location from 'expo-location'
 import { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { supabase } from '../../lib/supabase'
+import { COLORS, FONTS, SPACING, TYPE, RADIUS } from '../../theme'
 import type { HomeStackParamList } from '../../types'
-
-const COLORS = {
-  background: '#FAFAF7',
-  accent: '#8B7355',
-  text: '#2C2C2C',
-  subtext: '#9E9E9E',
-  border: '#E0D9D0',
-}
 
 const DISPLAY_RADIUS_KM = 5
 const SCREEN_HEIGHT = Dimensions.get('window').height
@@ -37,7 +31,30 @@ type NearbyPhoto = {
   image_url: string
   latitude: number
   longitude: number
+  unlock_at: string | null
   distanceKm: number
+}
+
+type PointFeature = {
+  type: 'Feature'
+  geometry: { type: 'Point'; coordinates: [number, number] }
+  properties: NearbyPhoto
+}
+
+type ClusterFeature = {
+  type: 'Feature'
+  geometry: { type: 'Point'; coordinates: [number, number] }
+  properties: {
+    cluster: true
+    cluster_id: number
+    point_count: number
+  }
+}
+
+type MapFeature = PointFeature | ClusterFeature
+
+function isCluster(f: MapFeature): f is ClusterFeature {
+  return !!(f.properties as { cluster?: boolean }).cluster
 }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -56,36 +73,76 @@ function formatDistance(km: number): string {
   return `約 ${km.toFixed(1)}km`
 }
 
+function regionToZoom(region: Region): number {
+  return Math.round(Math.log(360 / region.longitudeDelta) / Math.LN2)
+}
+
 export default function NearbyScreen({ navigation }: Props) {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null)
-  const [photos, setPhotos] = useState<NearbyPhoto[]>([])
+  const [nearbyPhotos, setNearbyPhotos] = useState<NearbyPhoto[]>([])
+  const [displayClusters, setDisplayClusters] = useState<MapFeature[]>([])
   const [loading, setLoading] = useState(true)
   const [permissionDenied, setPermissionDenied] = useState(false)
   const [listVisible, setListVisible] = useState(false)
 
-  const fetchNearbyPhotos = useCallback(async (coords: { latitude: number; longitude: number }) => {
+  const scRef = useRef<Supercluster<NearbyPhoto> | null>(null)
+  const mapRef = useRef<MapView>(null)
+  const regionRef = useRef<Region | null>(null)
+  const zoomRef = useRef(10)
+
+  // zoom 7→24px、zoom 13→48px でリニア補間し上下をクランプ
+  const markerSize = Math.max(28, Math.min(48, (zoomRef.current - 7) * 4 + 24))
+
+  const calcClusters = useCallback((region: Region) => {
+    if (!scRef.current) return
+    const bbox: [number, number, number, number] = [
+      region.longitude - region.longitudeDelta / 2,
+      region.latitude - region.latitudeDelta / 2,
+      region.longitude + region.longitudeDelta / 2,
+      region.latitude + region.latitudeDelta / 2,
+    ]
+    const zoom = Math.max(1, Math.min(regionToZoom(region), 20))
+    zoomRef.current = zoom
+    setDisplayClusters(scRef.current.getClusters(bbox, zoom) as MapFeature[])
+  }, [])
+
+  const fetchPhotos = useCallback(async (coords: { latitude: number; longitude: number }) => {
     const { data } = await supabase
       .from('photos')
-      .select('id, image_url, latitude, longitude')
+      .select('id, image_url, latitude, longitude, unlock_at')
       .not('latitude', 'is', null)
       .not('longitude', 'is', null)
       .not('album_id', 'is', null)
 
     if (!data) return
 
-    const nearby = data
+    const now = Date.now()
+    const all = data
+      .filter(p => !p.unlock_at || new Date(p.unlock_at).getTime() <= now)
       .map(p => ({
         id: p.id,
         image_url: p.image_url,
         latitude: p.latitude,
         longitude: p.longitude,
+        unlock_at: p.unlock_at ?? null,
         distanceKm: haversineKm(coords.latitude, coords.longitude, p.latitude, p.longitude),
       }))
-      .filter(p => p.distanceKm <= DISPLAY_RADIUS_KM)
       .sort((a, b) => a.distanceKm - b.distanceKm)
 
-    setPhotos(nearby)
-  }, [])
+    // 近くの一覧（バッジ・ボトムシート用）
+    setNearbyPhotos(all.filter(p => p.distanceKm <= DISPLAY_RADIUS_KM))
+
+    // supercluster インデックスを全件で構築
+    const sc = new Supercluster<NearbyPhoto>({ radius: 50, maxZoom: 15, minPoints: 2 })
+    sc.load(all.map(p => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [p.longitude, p.latitude] },
+      properties: p,
+    })))
+    scRef.current = sc
+
+    if (regionRef.current) calcClusters(regionRef.current)
+  }, [calcClusters])
 
   useEffect(() => {
     const init = async () => {
@@ -98,11 +155,27 @@ export default function NearbyScreen({ navigation }: Props) {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude }
       setUserLocation(coords)
-      await fetchNearbyPhotos(coords)
+      await fetchPhotos(coords)
       setLoading(false)
     }
     init()
-  }, [fetchNearbyPhotos])
+  }, [fetchPhotos])
+
+  const handleRegionChangeComplete = useCallback((region: Region) => {
+    regionRef.current = region
+    calcClusters(region)
+  }, [calcClusters])
+
+  const handleClusterPress = useCallback((feature: ClusterFeature) => {
+    if (!scRef.current || !mapRef.current) return
+    const expansionZoom = scRef.current.getClusterExpansionZoom(feature.properties.cluster_id)
+    const [lng, lat] = feature.geometry.coordinates
+    const newDelta = 360 / Math.pow(2, Math.min(expansionZoom + 1, 20))
+    mapRef.current.animateToRegion(
+      { latitude: lat, longitude: lng, latitudeDelta: newDelta, longitudeDelta: newDelta },
+      400,
+    )
+  }, [])
 
   const handleSelectPhoto = (photoId: string) => {
     setListVisible(false)
@@ -113,7 +186,7 @@ export default function NearbyScreen({ navigation }: Props) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={COLORS.accent} size="large" />
-        <Text style={styles.loadingText}>現在地を取得中…</Text>
+        <Text style={styles.loadingText}>現在地を確かめています…</Text>
       </View>
     )
   }
@@ -126,7 +199,7 @@ export default function NearbyScreen({ navigation }: Props) {
     )
   }
 
-  const region: Region = {
+  const initialRegion: Region = {
     latitude: userLocation!.latitude,
     longitude: userLocation!.longitude,
     latitudeDelta: 0.02,
@@ -135,35 +208,83 @@ export default function NearbyScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      <MapView style={styles.map} initialRegion={region} showsUserLocation showsMyLocationButton>
-        {photos.map(photo => (
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        initialRegion={initialRegion}
+        showsMyLocationButton
+        onRegionChangeComplete={handleRegionChangeComplete}
+      >
+        {userLocation && (
           <Marker
-            key={photo.id}
-            coordinate={{ latitude: photo.latitude, longitude: photo.longitude }}
+            coordinate={{ latitude: userLocation.latitude, longitude: userLocation.longitude }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            zIndex={0}
           >
-            <View style={styles.pin}>
-              <Image source={{ uri: photo.image_url }} style={styles.pinImage} resizeMode="cover" />
-            </View>
-            <Callout onPress={() => handleSelectPhoto(photo.id)}>
-              <View style={styles.callout}>
-                <Image source={{ uri: photo.image_url }} style={styles.calloutImage} resizeMode="cover" />
-                <Text style={styles.calloutButton}>ここでロック解除する</Text>
-              </View>
-            </Callout>
+            <View style={styles.userDot} />
           </Marker>
-        ))}
+        )}
+        {displayClusters.map(feature => {
+          const [lng, lat] = feature.geometry.coordinates
+
+          if (isCluster(feature)) {
+            const count = feature.properties.point_count
+            const thumb = scRef.current
+              ?.getLeaves(feature.properties.cluster_id, 1)[0]
+              ?.properties?.image_url
+            return (
+              <Marker
+                key={`cluster-${feature.properties.cluster_id}`}
+                coordinate={{ latitude: lat, longitude: lng }}
+                onPress={() => handleClusterPress(feature)}
+                tracksViewChanges={false}
+              >
+                <View style={[styles.clusterWrap, { width: markerSize, height: markerSize }]}>
+                  <View style={[styles.pinFrame, { width: markerSize, height: markerSize }]}>
+                    {thumb
+                      ? <Image source={{ uri: thumb }} style={styles.pinImage} resizeMode="cover" />
+                      : <View style={[styles.pinImage, { backgroundColor: COLORS.paperDeep }]} />
+                    }
+                  </View>
+                  <View style={styles.clusterBadge}>
+                    <Text style={styles.clusterBadgeText}>{count > 99 ? '99+' : count}</Text>
+                  </View>
+                </View>
+              </Marker>
+            )
+          }
+
+          const photo = feature.properties
+          return (
+            <Marker
+              key={photo.id}
+              coordinate={{ latitude: lat, longitude: lng }}
+              tracksViewChanges={false}
+            >
+              <View style={[styles.pinFrame, { width: markerSize, height: markerSize }]}>
+                <Image source={{ uri: photo.image_url }} style={styles.pinImage} resizeMode="cover" />
+              </View>
+              <Callout onPress={() => handleSelectPhoto(photo.id)}>
+                <View style={styles.callout}>
+                  <Image source={{ uri: photo.image_url }} style={styles.calloutImage} resizeMode="cover" />
+                  <Text style={styles.calloutButton}>ここでロック解除する</Text>
+                </View>
+              </Callout>
+            </Marker>
+          )
+        })}
       </MapView>
 
       <TouchableOpacity
-        style={styles.badge}
-        onPress={() => photos.length > 0 && setListVisible(true)}
-        activeOpacity={photos.length > 0 ? 0.7 : 1}
+        style={styles.headerBadge}
+        onPress={() => nearbyPhotos.length > 0 && setListVisible(true)}
+        activeOpacity={nearbyPhotos.length > 0 ? 0.7 : 1}
       >
-        <Text style={styles.badgeText}>近くの思い出 {photos.length}件</Text>
-        {photos.length > 0 && <Text style={styles.badgeChevron}>›</Text>}
+        <Text style={styles.headerBadgeText}>近くの思い出</Text>
+        <Text style={styles.headerBadgeCount}>{nearbyPhotos.length}</Text>
       </TouchableOpacity>
 
-      {/* Photo list bottom sheet */}
       <Modal
         visible={listVisible}
         animationType="slide"
@@ -173,10 +294,11 @@ export default function NearbyScreen({ navigation }: Props) {
         <Pressable style={styles.sheetOverlay} onPress={() => setListVisible(false)}>
           <Pressable style={styles.sheet}>
             <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>この付近の思い出 {photos.length}件</Text>
+            <Text style={styles.sheetTitle}>この付近の思い出</Text>
+            <Text style={styles.sheetCount}>{nearbyPhotos.length}件</Text>
 
             <FlatList
-              data={photos}
+              data={nearbyPhotos}
               keyExtractor={item => item.id}
               contentContainerStyle={styles.listContent}
               ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -186,16 +308,10 @@ export default function NearbyScreen({ navigation }: Props) {
                   onPress={() => handleSelectPhoto(item.id)}
                   activeOpacity={0.75}
                 >
-                  <View style={styles.thumbWrapper}>
-                    <Image
-                      source={{ uri: item.image_url }}
-                      style={styles.listThumb}
-                      resizeMode="cover"
-                    />
-                  </View>
+                  <Image source={{ uri: item.image_url }} style={styles.listThumb} resizeMode="cover" />
                   <View style={styles.listInfo}>
                     <Text style={styles.listDistance}>{formatDistance(item.distanceKm)}</Text>
-                    <Text style={styles.listHint}>タップしてロック解除へ</Text>
+                    <Text style={styles.listHint}>タップして訪ねる</Text>
                   </View>
                   <Text style={styles.listArrow}>›</Text>
                 </TouchableOpacity>
@@ -209,106 +325,149 @@ export default function NearbyScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: COLORS.paper },
   center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.background,
-    gap: 12,
+    backgroundColor: COLORS.paper,
+    paddingHorizontal: SPACING.xxxl,
+    gap: SPACING.md,
   },
-  loadingText: { color: COLORS.subtext, fontSize: 13 },
-  permissionText: {
-    color: COLORS.text,
-    fontSize: 15,
-    textAlign: 'center',
-    paddingHorizontal: 32,
-    lineHeight: 24,
-  },
+  loadingText: { ...TYPE.caption, color: COLORS.inkSoft },
+  permissionText: { ...TYPE.body, textAlign: 'center', lineHeight: 24 },
   map: { flex: 1 },
-  pin: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  userDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: 'rgba(58, 74, 92, 0.55)',
     borderWidth: 2,
-    borderColor: COLORS.accent,
-    overflow: 'hidden',
-    backgroundColor: COLORS.border,
+    borderColor: 'rgba(255, 255, 255, 0.85)',
   },
-  pinImage: { width: '100%', height: '100%' },
-  callout: { width: 180, alignItems: 'center', paddingBottom: 4 },
-  calloutImage: { width: 168, height: 110, borderRadius: 6, marginBottom: 8 },
-  calloutButton: { fontSize: 13, color: COLORS.accent, fontWeight: '600' },
-  badge: {
+
+  // クラスターピン（写真サムネ＋件数バッジ）
+  clusterWrap: {},
+  clusterBadge: {
     position: 'absolute',
-    top: 16,
+    top: -6,
+    right: -6,
+    backgroundColor: COLORS.seal,
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: COLORS.paper,
+  },
+  clusterBadgeText: {
+    fontFamily: FONTS.sans,
+    fontSize: 10,
+    color: COLORS.paper,
+    fontWeight: '700',
+  },
+
+  // 写真サムネピン（紙の縁取り風）
+  pinFrame: {
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: COLORS.paper,
+    backgroundColor: COLORS.paper,
+    padding: 2,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  pinImage: { width: '100%', height: '100%', borderRadius: 2 },
+
+  callout: { width: 180, alignItems: 'center', paddingBottom: SPACING.xs },
+  calloutImage: { width: 168, height: 110, borderRadius: RADIUS.thumb, marginBottom: SPACING.sm },
+  calloutButton: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    color: COLORS.accent,
+    fontWeight: '500',
+  },
+
+  headerBadge: {
+    position: 'absolute',
+    top: SPACING.lg,
     alignSelf: 'center',
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    alignItems: 'baseline',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.paper,
+    borderRadius: 2,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: COLORS.rule,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  badgeText: { fontSize: 13, color: COLORS.text },
-  badgeChevron: { fontSize: 16, color: COLORS.accent, lineHeight: 18 },
+  headerBadgeText: { fontFamily: FONTS.serif, fontSize: 15, color: COLORS.ink },
+  headerBadgeCount: { fontFamily: FONTS.serif, fontSize: 18, color: COLORS.seal },
 
-  // Bottom sheet
   sheetOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(44,38,32,0.35)',
   },
   sheet: {
-    backgroundColor: COLORS.background,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: SCREEN_HEIGHT * 0.65,
-    paddingBottom: 32,
+    backgroundColor: COLORS.paper,
+    borderTopLeftRadius: SPACING.lg,
+    borderTopRightRadius: SPACING.lg,
+    maxHeight: SCREEN_HEIGHT * 0.7,
+    paddingBottom: SPACING.xxxl,
   },
   sheetHandle: {
-    width: 36,
-    height: 4,
-    backgroundColor: COLORS.border,
+    width: 32,
+    height: 3,
+    backgroundColor: COLORS.rule,
     borderRadius: 2,
     alignSelf: 'center',
-    marginTop: 10,
-    marginBottom: 4,
+    marginTop: SPACING.md,
+    marginBottom: SPACING.lg,
   },
-  sheetTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.text,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  sheetTitle: { ...TYPE.title, fontSize: 20, paddingHorizontal: SPACING.xl },
+  sheetCount: {
+    ...TYPE.meta,
+    paddingHorizontal: SPACING.xl,
+    marginTop: SPACING.xs,
+    marginBottom: SPACING.md,
+    paddingBottom: SPACING.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: COLORS.rule,
   },
-  listContent: { paddingVertical: 4 },
+  listContent: { paddingTop: SPACING.xs },
   separator: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: COLORS.border,
-    marginLeft: 88,
+    backgroundColor: COLORS.rule,
+    marginLeft: SPACING.xl + 60 + SPACING.lg,
   },
   listItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    gap: 14,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.md,
+    gap: SPACING.lg,
   },
-  thumbWrapper: {
+  listThumb: {
     width: 60,
     height: 60,
-    borderRadius: 8,
-    overflow: 'hidden',
+    borderRadius: RADIUS.thumb,
+    backgroundColor: COLORS.paperDeep,
   },
-  listThumb: { width: '100%', height: '100%' },
   listInfo: { flex: 1, gap: 3 },
-  listDistance: { fontSize: 14, color: COLORS.text, fontWeight: '500' },
-  listHint: { fontSize: 12, color: COLORS.subtext },
-  listArrow: { fontSize: 20, color: COLORS.subtext, lineHeight: 22 },
+  listDistance: { fontFamily: FONTS.serif, fontSize: 16, color: COLORS.ink },
+  listHint: { ...TYPE.caption, color: COLORS.inkSoft },
+  listArrow: { fontFamily: FONTS.sans, fontSize: 22, color: COLORS.inkSoft, fontWeight: '300' },
 })
