@@ -48,7 +48,7 @@ function request(fields: Record<string, string> = {}, opts: { token?: string; ph
   };
   for (const [k, v] of Object.entries(base)) form.set(k, v);
   const photo = opts.photo === undefined
-    ? new File([new Uint8Array([0xff, 0xd8, 0xff])], "now.jpg", { type: "image/jpeg" })
+    ? new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0])], "now.jpg", { type: "image/jpeg" })
     : opts.photo;
   if (photo) form.set("photo", photo);
   return new Request("http://localhost/unlock", {
@@ -126,6 +126,13 @@ Deno.test("見えない思い出は 404", async () => {
   const { deps } = fakeDeps();
   const res = await createHandler(deps)(request({ memory_id: "22222222-0000-0000-0000-000000000000" }));
   assertEquals(res.status, 404);
+});
+
+Deno.test("種類が付いていなくても中身が JPEG なら受け付ける", async () => {
+  const { deps } = fakeDeps();
+  const noType = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0])], "blob");
+  const body = await (await createHandler(deps)(request({}, { photo: noType }))).json();
+  assertEquals(body.matched, true);
 });
 
 Deno.test("ログインしていなければ 401", async () => {

@@ -53,6 +53,11 @@ export function isNearby(distance: number, accuracy: number): boolean {
   return distance - slack <= RADIUS_M;
 }
 
+// JPEG の先頭は FF D8 FF
+export function isJpeg(bytes: Uint8Array): boolean {
+  return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+}
+
 type Input = {
   memoryId: string;
   latitude: number;
@@ -81,8 +86,10 @@ async function parseInput(req: Request): Promise<Input | string> {
 
   const file = form.get("photo");
   if (!(file instanceof File)) return "photo がありません";
-  if (file.type !== "image/jpeg") return "photo は JPEG にしてください";
   if (file.size > MAX_PHOTO_BYTES) return "photo が大きすぎます（5MB まで）";
+  const photo = new Uint8Array(await file.arrayBuffer());
+  // 送り方によってはファイルの種類が付かないので、中身が JPEG かどうかで確かめる
+  if (!isJpeg(photo)) return "photo は JPEG にしてください";
 
   return {
     memoryId,
@@ -90,7 +97,7 @@ async function parseInput(req: Request): Promise<Input | string> {
     longitude,
     accuracy,
     savePhoto: form.get("save_photo") === "true",
-    photo: new Uint8Array(await file.arrayBuffer()),
+    photo,
   };
 }
 

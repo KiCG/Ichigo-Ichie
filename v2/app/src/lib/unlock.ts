@@ -1,5 +1,6 @@
 // 解除用の Edge Function の呼び出し
 import { FunctionsHttpError } from '@supabase/supabase-js';
+import { File } from 'expo-file-system';
 
 import { preparePhoto } from '@/lib/memories';
 import { supabase } from '@/lib/supabase';
@@ -26,8 +27,9 @@ export async function unlockMemory(input: {
   form.append('longitude', String(input.longitude));
   form.append('accuracy', String(input.accuracy ?? 0));
   form.append('save_photo', input.savePhoto ? 'true' : 'false');
-  // React Native の FormData は { uri, name, type } でファイルを送る
-  form.append('photo', { uri: jpegUri, name: 'photo.jpg', type: 'image/jpeg' } as unknown as Blob);
+  // SDK 58 の fetch（expo/fetch）は { uri, name, type } 形式を送れないので、
+  // expo-file-system の File（Blob として扱える）をそのまま添付する
+  form.append('photo', new File(jpegUri));
 
   const { data, error } = await supabase.functions.invoke('unlock', { body: form });
 
