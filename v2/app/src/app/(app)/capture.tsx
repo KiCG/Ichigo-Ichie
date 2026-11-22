@@ -52,7 +52,7 @@ export default function CaptureScreen() {
     const request = needCamera ? requestCameraPermission : requestLocationPermission;
     return (
       <SafeAreaView style={styles.permission}>
-        <Ionicons name={needCamera ? 'camera-outline' : 'location-outline'} size={48} color={colors.primary} />
+        <Ionicons name={needCamera ? 'camera-outline' : 'location-outline'} size={48} color={colors.primary} style={{ alignSelf: 'center' }} />
         <Text style={styles.permissionTitle}>{needCamera ? 'カメラを使わせてください' : '位置情報を使わせてください'}</Text>
         <Text style={styles.permissionText}>
           {needCamera

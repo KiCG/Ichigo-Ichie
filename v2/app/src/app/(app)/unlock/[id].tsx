@@ -65,7 +65,7 @@ export default function UnlockScreen() {
     const request = needCamera ? requestCameraPermission : requestLocationPermission;
     return (
       <SafeAreaView style={styles.page}>
-        <Ionicons name={needCamera ? 'camera-outline' : 'location-outline'} size={48} color={colors.primary} />
+        <Ionicons name={needCamera ? 'camera-outline' : 'location-outline'} size={48} color={colors.primary} style={{ alignSelf: 'center' }} />
         <Text style={styles.pageTitle}>{needCamera ? 'カメラを使わせてください' : '位置情報を使わせてください'}</Text>
         <Text style={styles.pageText}>思い出を開くには、撮影した場所で、同じ風景を撮る必要があります。</Text>
         {permission.canAskAgain ? (
@@ -185,7 +185,7 @@ function OutcomeView({ outcome, memoryId, onRetry }: { outcome: Outcome; memoryI
   if (outcome.kind === 'unlocked') {
     return (
       <SafeAreaView style={styles.page}>
-        <Ionicons name="lock-open" size={56} color={colors.primary} />
+        <Ionicons name="lock-open" size={56} color={colors.primary} style={{ alignSelf: 'center' }} />
         <Text style={styles.pageTitle}>思い出が開きました</Text>
         <Text style={styles.pageText}>
           {outcome.newlyReadable > 0
@@ -204,7 +204,7 @@ function OutcomeView({ outcome, memoryId, onRetry }: { outcome: Outcome; memoryI
   }
   return (
     <SafeAreaView style={styles.page}>
-      <Ionicons name={outcome.kind === 'too_far' ? 'walk-outline' : 'help-circle-outline'} size={56} color={colors.primary} />
+      <Ionicons name={outcome.kind === 'too_far' ? 'walk-outline' : 'help-circle-outline'} size={56} color={colors.primary} style={{ alignSelf: 'center' }} />
       <Text style={styles.pageTitle}>{outcome.kind === 'too_far' ? 'まだ少し遠いようです' : '同じ場所だと判定されませんでした'}</Text>
       <Text style={styles.pageText}>
         {outcome.kind === 'too_far'
