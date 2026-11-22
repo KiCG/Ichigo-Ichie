@@ -10,6 +10,7 @@
 cd v2/app
 npm install
 cp .env.example .env.local   # 接続先（東京の Supabase プロジェクト）
+npx expo login               # 初回だけ。Expo Go と同じ Expo アカウントでログインする
 npx expo start
 ```
 
