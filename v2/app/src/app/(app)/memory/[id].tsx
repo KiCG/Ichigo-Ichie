@@ -16,6 +16,7 @@ import {
 
 import { Photo } from '@/components/Photo';
 import { Button, ErrorText } from '@/components/ui';
+import { type Album, listAlbums, removeMemoryFromAlbum } from '@/lib/albums';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/format';
 import {
@@ -31,16 +32,36 @@ import {
   sealMessage,
   type Visit,
 } from '@/lib/memories';
+import { getDisplayNames } from '@/lib/profiles';
 import { colors, spacing } from '@/theme';
 
-type Loaded = { memory: MemorySummary | null; messages: MemoryMessage[]; visits: Visit[]; error: string };
+type Loaded = {
+  memory: MemorySummary | null;
+  messages: MemoryMessage[];
+  visits: Visit[];
+  album: Album | null;
+  names: Record<string, string>;
+  error: string;
+};
 
 async function load(id: string): Promise<Loaded> {
   try {
-    const [memory, messages, visits] = await Promise.all([getMemory(id), getMessages(id), listVisits(id)]);
-    return { memory, messages, visits, error: '' };
+    const [memory, messages, visits, albums] = await Promise.all([
+      getMemory(id),
+      getMessages(id),
+      listVisits(id),
+      listAlbums(),
+    ]);
+    const album = albums.find((a) => a.id === memory?.album_id) ?? null;
+    // 共有アルバムでは「誰の思い出・誰の追記・誰の訪問か」を表示する
+    const names = await getDisplayNames([
+      ...(memory ? [memory.owner_id] : []),
+      ...messages.map((m) => m.author_id),
+      ...visits.map((v) => v.user_id),
+    ]);
+    return { memory, messages, visits, album, names, error: '' };
   } catch (e) {
-    return { memory: null, messages: [], visits: [], error: errorMessage(e) };
+    return { memory: null, messages: [], visits: [], album: null, names: {}, error: errorMessage(e) };
   }
 }
 
@@ -75,18 +96,31 @@ export default function MemoryScreen() {
       </View>
     );
   }
-  return <MemoryDetail memory={data.memory} messages={data.messages} visits={data.visits} onChanged={reload} />;
+  return (
+    <MemoryDetail
+      memory={data.memory}
+      messages={data.messages}
+      visits={data.visits}
+      album={data.album}
+      names={data.names}
+      onChanged={reload}
+    />
+  );
 }
 
 function MemoryDetail({
   memory,
   messages,
   visits,
+  album,
+  names,
   onChanged,
 }: {
   memory: MemorySummary;
   messages: MemoryMessage[];
   visits: Visit[];
+  album: Album | null;
+  names: Record<string, string>;
   onChanged: () => Promise<void>;
 }) {
   const { session } = useAuth();
@@ -98,6 +132,32 @@ function MemoryDetail({
   const myAddendumDraft = messages.find((m) => !m.is_original && !m.sealed_at && m.author_id === session?.user.id);
   const visitPhotos = visits.filter((v) => v.photo_path);
   const [creatingAddendum, setCreatingAddendum] = useState(false);
+  const me = session?.user.id;
+  const shared = (album?.member_count ?? 1) > 1;
+  const who = (userId: string) => (userId === me ? 'あなた' : names[userId] ?? '');
+  const canRemoveFromAlbum = !isOwner && album?.my_role === 'owner';
+
+  function confirmRemoveFromAlbum() {
+    Alert.alert(
+      'アルバムから外しますか？',
+      `${who(memory.owner_id)} さんの思い出は消えずに、その人の「未整理」に戻ります。`,
+      [
+        { text: 'やめる', style: 'cancel' },
+        {
+          text: '外す',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await removeMemoryFromAlbum(memory.id);
+              router.back();
+            } catch (e) {
+              setError(errorMessage(e));
+            }
+          },
+        },
+      ],
+    );
+  }
 
   async function startAddendum() {
     if (!session) return;
@@ -141,6 +201,22 @@ function MemoryDetail({
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <Photo path={memory.photo_path} style={{ width: width - spacing.md * 2, aspectRatio: 3 / 4, borderRadius: 12 }} />
 
+        <View style={styles.metaRow}>
+          <Ionicons name={album ? (shared ? 'people-outline' : 'albums-outline') : 'file-tray-outline'} size={16} color={colors.textMuted} />
+          <Text style={styles.metaText} numberOfLines={1}>
+            {album ? album.name : '未整理'}
+            {!isOwner ? ` ・ ${who(memory.owner_id)} さんの思い出` : ''}
+          </Text>
+          {isOwner && (
+            <Text
+              style={styles.metaLink}
+              onPress={() => router.push({ pathname: '/move/[id]', params: { id: memory.id } })}
+            >
+              {album ? '変更' : 'アルバムに入れる'}
+            </Text>
+          )}
+        </View>
+
         {isDraft && isOwner && original ? (
           <DraftEditor kind="original" messageId={original.id} initialBody={original.body ?? ''} onSealed={onChanged} />
         ) : (
@@ -159,7 +235,8 @@ function MemoryDetail({
             {readable.map((m) => (
               <View key={m.id} style={styles.message}>
                 <Text style={styles.messageMeta}>
-                  {m.is_original ? '元のメッセージ' : '追記'} ・ {formatDate(m.sealed_at)} に封
+                  {m.is_original ? '元のメッセージ' : '追記'}
+                  {shared || m.author_id !== me ? ` ・ ${who(m.author_id)}` : ''} ・ {formatDate(m.sealed_at)} に封
                 </Text>
                 <Text style={styles.messageBody}>{m.body}</Text>
               </View>
@@ -190,6 +267,7 @@ function MemoryDetail({
                 <View key={v.id} style={{ gap: 4 }}>
                   <Photo path={v.photo_path!} style={styles.visitPhoto} />
                   <Text style={styles.messageMeta}>{formatDate(v.unlocked_at)}</Text>
+                  {shared && <Text style={styles.messageMeta}>{who(v.user_id)}</Text>}
                 </View>
               ))}
             </ScrollView>
@@ -200,6 +278,11 @@ function MemoryDetail({
         {isOwner && (
           <View style={{ marginTop: spacing.lg }}>
             <Button title="この思い出を消す" variant="secondary" onPress={confirmDelete} loading={deleting} />
+          </View>
+        )}
+        {canRemoveFromAlbum && (
+          <View style={{ marginTop: spacing.lg }}>
+            <Button title="この思い出をアルバムから外す" variant="secondary" onPress={confirmRemoveFromAlbum} />
           </View>
         )}
       </ScrollView>
@@ -351,6 +434,9 @@ const styles = StyleSheet.create({
   sealedTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
   sealedText: { fontSize: 14, color: colors.textMuted, lineHeight: 21 },
   note: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaText: { flex: 1, fontSize: 13, color: colors.textMuted },
+  metaLink: { fontSize: 13, color: colors.primary, fontWeight: '600' },
   visitPhoto: { width: 96, height: 128, borderRadius: 8 },
   message: { gap: 4, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
   messageMeta: { fontSize: 12, color: colors.textMuted },

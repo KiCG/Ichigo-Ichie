@@ -73,6 +73,16 @@ select ok((select member_count = 1 from my_albums() where id = :ALBUM), 'A の�
 delete from album_members where album_id = :ALBUM and user_id = :A;
 select ok((select my_role = 'owner' from my_albums() where id = :ALBUM), '持ち主はアルバムから抜けられない（0行削除）');
 
+-- 作った直後に読み返せる（アプリは insert ... returning で ID を受け取る）
+select as_user(:C);
+with x as (insert into albums (owner_id, name) values ('cccccccc-0000-0000-0000-000000000000', '新しいアルバム') returning id)
+select ok(count(*) = 1, 'アルバムを作った直後に読み返せる') from x;
+select ok((select my_role = 'owner' and member_count = 1 from my_albums() where name = '新しいアルバム'), '作った人が持ち主になる');
+with x as (insert into album_invites (album_id, created_by)
+           select id, 'cccccccc-0000-0000-0000-000000000000' from albums where name = '新しいアルバム'
+           returning token)
+select ok(count(*) = 1, '招待コードを作った直後に読み返せる') from x;
+
 set role anon;
 select as_user(null);
 select throws($$select * from my_albums()$$, 'ログインしていないと my_albums は呼べない');

@@ -163,6 +163,8 @@ export function errorMessage(e: unknown): string {
     return '写真の保存上限に達しています。使わない思い出を消すと、また撮れるようになります。';
   }
   if (message.includes('cannot seal an empty message')) return 'メッセージを書いてから封をしてください。';
+  if (message.includes('invalid invite')) return '招待コードが見つかりません。もう一度確かめてください。';
+  if (message.includes('not allowed')) return 'この操作をする権限がありません。';
   if (message.includes('already sealed')) return 'このメッセージにはもう封がされています。';
   if (message.includes('Network request failed') || message.includes('Failed to fetch')) {
     return '通信できませんでした。電波の良いところでもう一度試してください。';
