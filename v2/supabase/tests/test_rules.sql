@@ -23,7 +23,7 @@ begin
   update public.messages set sealed_at = p_at where id = p_id;
   alter table public.messages enable trigger messages_guard;
 end $$;
-grant execute on function public.ok(boolean, text), public.throws(text, text), public.as_user(uuid) to authenticated;
+grant execute on function public.ok(boolean, text), public.throws(text, text), public.as_user(uuid) to authenticated, anon;
 
 -- 利用者: A（持ち主）, B（友人）, C（部外者）
 insert into auth.users (id) values
@@ -165,9 +165,9 @@ select ok((select count(*) = 3 and count(*) filter (where is_readable) = 1
            from memory_messages('11111111-0000-0000-0000-000000000000')),
   '封をしたBの追記は、Aにはロック中として見える');
 select as_user(:B);
-select ok((select photo_count(:B) = 1), '訪問写真は撮った人の枚数に数える');
+select ok((select used = 1 from my_photo_usage()), '訪問写真は撮った人の枚数に数える');
 update unlocks set photo_path = null where user_id = :B;
-select ok((select photo_count(:B) = 0), '訪問写真を消すと枠が空く');
+select ok((select used = 0 from my_photo_usage()), '訪問写真を消すと枠が空く');
 select throws($$update unlocks set photo_path = 'other.jpg' where user_id = 'bbbbbbbb-0000-0000-0000-000000000000'$$,
   '訪問写真のパスを書き換えることはできない');
 
@@ -194,6 +194,17 @@ select throws($$update profiles set photo_limit = 999 where id = 'cccccccc-0000-
 insert into memories (owner_id, photo_path, latitude, longitude, taken_at) values (:C, 'c1.jpg', 0, 0, now());
 select throws($$insert into memories (owner_id, photo_path, latitude, longitude, taken_at) values ('cccccccc-0000-0000-0000-000000000000', 'c2.jpg', 0, 0, now())$$,
   '上限を超えると追加できない');
+
+select ok((select used = 1 and photo_limit = 1 from my_photo_usage()), '自分の枚数と上限は確認できる');
+select throws($$select photo_count('aaaaaaaa-0000-0000-0000-000000000000')$$, '他人の写真枚数は調べられない');
+select throws($$select is_memory_published('11111111-0000-0000-0000-000000000000')$$, '内部用の関数は直接呼べない');
+
+-- ログインしていない人
+reset role;
+set role anon;
+select as_user(null);
+select throws($$select memory_messages('11111111-0000-0000-0000-000000000000')$$, 'ログインしていないと関数を呼べない');
+select throws($$select accept_invite('tok')$$, 'ログインしていないと招待を受けられない');
 
 reset role;
 \echo ALL TESTS PASSED

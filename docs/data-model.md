@@ -45,6 +45,9 @@ profiles ─┬─< albums ──< album_members >── profiles
 | `seal_message(id)` | 下書きに封をする |
 | `memory_messages(memory_id)` | 思い出のメッセージ一覧（ロック判定つき） |
 | `accept_invite(token)` | 招待リンクでアルバムに参加する |
+| `my_photo_usage()` | 自分の写真の枚数と上限 |
+
+これ以外の関数は、アクセスルールやトリガーの中だけで使い、アプリから直接は呼べない。ログインしていない人は、どの関数も呼べない。
 
 ## まだ決めていない・後で作るもの
 

@@ -90,6 +90,14 @@ create table public.unlocks (
 );
 create index on public.unlocks (memory_id, user_id, unlocked_at);
 
+-- 外部キーの索引
+create index on public.albums (owner_id);
+create index on public.album_members (user_id);
+create index on public.album_invites (album_id);
+create index on public.album_invites (created_by);
+create index on public.messages (author_id);
+create index on public.unlocks (user_id);
+
 -- ============================================================
 -- 判定用の関数（RLS から呼ぶ。security definer で RLS の再帰を避ける）
 -- ============================================================
@@ -159,7 +167,7 @@ $$;
 
 -- メッセージ: 封をした日時は DB が決める。封をした後は変更できない
 create function public.messages_guard()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql set search_path = public as $$
 begin
   if tg_op = 'INSERT' then
     -- 作成時は必ず下書き。封は seal_message() で行う
@@ -283,6 +291,13 @@ begin
   return v_sealed_at;
 end $$;
 
+-- 自分の写真の枚数と上限（アプリの表示用）
+create function public.my_photo_usage()
+returns table (used integer, photo_limit integer)
+language sql stable security definer set search_path = public as $$
+  select photo_count(auth.uid()), p.photo_limit from profiles p where p.id = auth.uid()
+$$;
+
 -- 思い出のメッセージ一覧。ロック中のものは本文を返さない
 --   （行の存在と封をした日時は見えるので「ロック中のメッセージが n 件」を表示できる）
 create function public.memory_messages(p_memory_id uuid)
@@ -322,31 +337,31 @@ alter table public.unlocks       enable row level security;
 
 -- profiles: 自分と、同じアルバムのメンバーの表示名が見える
 create policy profiles_select on public.profiles for select using (
-  id = auth.uid()
+  id = (select auth.uid())
   or exists (
     select 1 from album_members a join album_members b on a.album_id = b.album_id
-    where a.user_id = auth.uid() and b.user_id = profiles.id
+    where a.user_id = (select auth.uid()) and b.user_id = profiles.id
   )
 );
 create policy profiles_update on public.profiles for update
-  using (id = auth.uid()) with check (id = auth.uid());
+  using (id = (select auth.uid())) with check (id = (select auth.uid()));
 -- photo_limit は利用者が変えられないようにする
 revoke update on public.profiles from authenticated;
 grant update (display_name, timezone) on public.profiles to authenticated;
 
 -- albums
 create policy albums_select on public.albums for select using (album_role(id) is not null);
-create policy albums_insert on public.albums for insert with check (owner_id = auth.uid());
+create policy albums_insert on public.albums for insert with check (owner_id = (select auth.uid()));
 create policy albums_update on public.albums for update
-  using (owner_id = auth.uid()) with check (owner_id = auth.uid());
-create policy albums_delete on public.albums for delete using (owner_id = auth.uid());
+  using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
+create policy albums_delete on public.albums for delete using (owner_id = (select auth.uid()));
 
 -- album_members: メンバー同士は見える。持ち主は他の人を外せる。自分は抜けられる（持ち主以外）
 create policy album_members_select on public.album_members for select
   using (album_role(album_id) is not null);
 create policy album_members_delete on public.album_members for delete using (
   role <> 'owner'
-  and (user_id = auth.uid() or album_role(album_id) = 'owner')
+  and (user_id = (select auth.uid()) or album_role(album_id) = 'owner')
 );
 -- 追加は accept_invite 経由のみ（insert ポリシーなし）
 
@@ -354,24 +369,24 @@ create policy album_members_delete on public.album_members for delete using (
 create policy album_invites_select on public.album_invites for select
   using (album_role(album_id) = 'owner');
 create policy album_invites_insert on public.album_invites for insert
-  with check (album_role(album_id) = 'owner' and created_by = auth.uid());
+  with check (album_role(album_id) = 'owner' and created_by = (select auth.uid()));
 create policy album_invites_update on public.album_invites for update
   using (album_role(album_id) = 'owner');
 
 -- memories
 create policy memories_select on public.memories for select using (can_view_memory(id));
 create policy memories_insert on public.memories for insert with check (
-  owner_id = auth.uid()
+  owner_id = (select auth.uid())
   and (album_id is null or album_role(album_id) in ('owner', 'editor'))
 );
 -- 持ち主だけが、未整理・アルバムへの出し入れを行える
 create policy memories_update on public.memories for update
-  using (owner_id = auth.uid())
+  using (owner_id = (select auth.uid()))
   with check (
-    owner_id = auth.uid()
+    owner_id = (select auth.uid())
     and (album_id is null or album_role(album_id) in ('owner', 'editor'))
   );
-create policy memories_delete on public.memories for delete using (owner_id = auth.uid());
+create policy memories_delete on public.memories for delete using (owner_id = (select auth.uid()));
 -- 写真・場所・撮影日時は後から変えられない
 revoke update on public.memories from authenticated;
 grant update (album_id) on public.memories to authenticated;
@@ -379,26 +394,26 @@ grant update (album_id) on public.memories to authenticated;
 -- messages: テーブルを直接読めるのは自分が書いたものだけ。
 --           他人のメッセージは memory_messages() 経由で読む（本文はロック判定つき）
 create policy messages_select on public.messages for select using (
-  author_id = auth.uid()
+  author_id = (select auth.uid())
   and (sealed_at is null or can_read_sealed(memory_id, sealed_at))
 );
 create policy messages_insert on public.messages for insert with check (
-  author_id = auth.uid()
+  author_id = (select auth.uid())
   and (
     -- 元のメッセージ: 思い出の持ち主だけ
-    (is_original and exists (select 1 from memories where id = memory_id and owner_id = auth.uid()))
+    (is_original and exists (select 1 from memories where id = memory_id and owner_id = (select auth.uid())))
     or
     -- 追記: 思い出が見えて、一度でも解除している人
     (not is_original
       and can_view_memory(memory_id)
-      and exists (select 1 from unlocks where memory_id = messages.memory_id and user_id = auth.uid()))
+      and exists (select 1 from unlocks where memory_id = messages.memory_id and user_id = (select auth.uid())))
   )
 );
 create policy messages_update on public.messages for update
-  using (author_id = auth.uid() and sealed_at is null)
-  with check (author_id = auth.uid());
+  using (author_id = (select auth.uid()) and sealed_at is null)
+  with check (author_id = (select auth.uid()));
 create policy messages_delete on public.messages for delete
-  using (author_id = auth.uid() and sealed_at is null);
+  using (author_id = (select auth.uid()) and sealed_at is null);
 revoke update on public.messages from authenticated;
 grant update (body) on public.messages to authenticated;
 
@@ -407,6 +422,25 @@ grant update (body) on public.messages to authenticated;
 create policy unlocks_select on public.unlocks for select using (can_view_memory(memory_id));
 -- 訪問写真を後から消すことはできる（枠を空けるため）
 create policy unlocks_update on public.unlocks for update
-  using (user_id = auth.uid()) with check (user_id = auth.uid() and photo_path is null);
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()) and photo_path is null);
 revoke update on public.unlocks from authenticated;
 grant update (photo_path) on public.unlocks to authenticated;
+
+-- ============================================================
+-- 関数の実行権限
+-- ============================================================
+-- Supabase は新しい関数を anon / authenticated から呼べるようにするため、いったんすべて外す
+revoke execute on all functions in schema public from public, anon, authenticated;
+
+-- アプリから呼ぶ関数（ログインしている人だけ）
+grant execute on function public.accept_invite(text)          to authenticated;
+grant execute on function public.seal_message(uuid)           to authenticated;
+grant execute on function public.memory_messages(uuid)        to authenticated;
+grant execute on function public.my_photo_usage()             to authenticated;
+
+-- アクセスルール（RLS）の中で使う関数。ルールは呼び出した人の権限で評価されるため必要
+grant execute on function public.album_role(uuid)                        to authenticated;
+grant execute on function public.can_view_memory(uuid)                   to authenticated;
+grant execute on function public.can_read_sealed(uuid, timestamptz)      to authenticated;
+
+-- is_memory_published / photo_count / トリガー用の関数は、他の関数の中からだけ使う（直接は呼べない）
