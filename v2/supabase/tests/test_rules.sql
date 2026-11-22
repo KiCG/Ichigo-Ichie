@@ -26,13 +26,16 @@ end $$;
 grant execute on function public.ok(boolean, text), public.throws(text, text), public.as_user(uuid) to authenticated, anon;
 
 -- 利用者: A（持ち主）, B（友人）, C（部外者）
-insert into auth.users (id) values
-  ('aaaaaaaa-0000-0000-0000-000000000000'),
-  ('bbbbbbbb-0000-0000-0000-000000000000'),
-  ('cccccccc-0000-0000-0000-000000000000');
+insert into auth.users (id, raw_user_meta_data) values
+  ('aaaaaaaa-0000-0000-0000-000000000000', '{"display_name": " あや "}'),
+  ('bbbbbbbb-0000-0000-0000-000000000000', '{}'),
+  ('cccccccc-0000-0000-0000-000000000000', null);
 \set A '''aaaaaaaa-0000-0000-0000-000000000000'''
 \set B '''bbbbbbbb-0000-0000-0000-000000000000'''
 \set C '''cccccccc-0000-0000-0000-000000000000'''
+
+select ok((select display_name = 'あや' from profiles where id = 'aaaaaaaa-0000-0000-0000-000000000000'), '登録時の表示名がプロフィールに入る');
+select ok((select count(*) = 2 from profiles where display_name = ''), '表示名がなければ空');
 
 set role authenticated;
 

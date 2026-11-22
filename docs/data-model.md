@@ -7,7 +7,7 @@
 
 | プロジェクト | リージョン | 状態 |
 |---|---|---|
-| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage` 適用済み。Edge Function `unlock` デプロイ済み |
+| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage`・`v2_profile_display_name` 適用済み。Edge Function `unlock` デプロイ済み |
 | `ichigo-ichie`（シドニー） | ap-southeast-2 | 一時停止中。不要なので削除してよい |
 
 ## テーブル（7つ）
