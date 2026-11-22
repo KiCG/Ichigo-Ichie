@@ -33,9 +33,13 @@ npx expo install <package>   # パッケージの追加（SDK に合う版を選
 |---|---|
 | `src/app/` | 画面（ファイルの置き場所がそのまま画面の構成になる） |
 | `src/app/sign-in.tsx` | ログイン・新規登録 |
-| `src/app/(app)/(tabs)/` | タブの画面（思い出一覧・その他） |
+| `src/app/(app)/(tabs)/` | タブの画面（思い出一覧・マップ・その他） |
 | `src/app/(app)/capture.tsx` | 撮影（撮り直しできる） |
-| `src/app/(app)/memory/[id].tsx` | 思い出の詳細（下書きの編集・封をする・削除） |
+| `src/app/(app)/memory/[id].tsx` | 思い出の詳細（下書き・封・読めるメッセージ・追記・訪問写真・削除） |
+| `src/app/(app)/unlock/[id].tsx` | 解除カメラ（現地で撮影して解除する） |
+| `src/components/MemoryMap.tsx` | 地図（Web 版は `MemoryMap.web.tsx` の一覧で代用） |
+| `src/lib/unlock.ts` | 解除用の Edge Function の呼び出し |
+| `src/lib/geo.ts` | 距離の計算 |
 | `src/lib/memories.ts` | 思い出・メッセージの読み書き |
 | `src/lib/photos.ts` | 非公開の写真を表示するための URL の取得 |
 | `src/lib/supabase.ts` | Supabase への接続 |

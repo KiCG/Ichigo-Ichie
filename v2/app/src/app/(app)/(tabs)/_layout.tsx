@@ -22,6 +22,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="map"
+        options={{
+          title: 'マップ',
+          tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" size={size} color={color as string} />,
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: 'その他',

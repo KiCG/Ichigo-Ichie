@@ -16,6 +16,7 @@ export default function AppLayout() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="capture" options={{ presentation: 'fullScreenModal', headerShown: false }} />
+      <Stack.Screen name="unlock/[id]" options={{ presentation: 'fullScreenModal', headerShown: false }} />
       <Stack.Screen name="memory/[id]" options={{ title: '' }} />
     </Stack>
   );

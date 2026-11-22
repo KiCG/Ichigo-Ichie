@@ -109,6 +109,30 @@ export async function getMessages(memoryId: string): Promise<MemoryMessage[]> {
   return (data ?? []) as MemoryMessage[];
 }
 
+// 追記の下書きを作る（解除したことのある人だけが作れる）
+export async function createAddendum(memoryId: string, userId: string): Promise<string> {
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({ memory_id: memoryId, author_id: userId, is_original: false, body: '' })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return data.id as string;
+}
+
+export type Visit = { id: string; user_id: string; unlocked_at: string; photo_path: string | null };
+
+// 訪問の記録（訪問写真つき）。古い順
+export async function listVisits(memoryId: string): Promise<Visit[]> {
+  const { data, error } = await supabase
+    .from('unlocks')
+    .select('id, user_id, unlocked_at, photo_path')
+    .eq('memory_id', memoryId)
+    .order('unlocked_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as Visit[];
+}
+
 export async function saveDraft(messageId: string, body: string) {
   const { error } = await supabase.from('messages').update({ body }).eq('id', messageId);
   if (error) throw error;

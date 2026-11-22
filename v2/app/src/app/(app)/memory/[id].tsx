@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,25 +19,28 @@ import { Button, ErrorText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/format';
 import {
+  createAddendum,
   deleteMemory,
   errorMessage,
   getMemory,
   getMessages,
+  listVisits,
   type MemoryMessage,
   type MemorySummary,
   saveDraft,
   sealMessage,
+  type Visit,
 } from '@/lib/memories';
 import { colors, spacing } from '@/theme';
 
-type Loaded = { memory: MemorySummary | null; messages: MemoryMessage[]; error: string };
+type Loaded = { memory: MemorySummary | null; messages: MemoryMessage[]; visits: Visit[]; error: string };
 
 async function load(id: string): Promise<Loaded> {
   try {
-    const [memory, messages] = await Promise.all([getMemory(id), getMessages(id)]);
-    return { memory, messages, error: '' };
+    const [memory, messages, visits] = await Promise.all([getMemory(id), getMessages(id), listVisits(id)]);
+    return { memory, messages, visits, error: '' };
   } catch (e) {
-    return { memory: null, messages: [], error: errorMessage(e) };
+    return { memory: null, messages: [], visits: [], error: errorMessage(e) };
   }
 }
 
@@ -47,13 +50,16 @@ export default function MemoryScreen() {
 
   const reload = useCallback(() => load(id).then(setData), [id]);
 
-  useEffect(() => {
-    let active = true;
-    load(id).then((d) => active && setData(d));
-    return () => {
-      active = false;
-    };
-  }, [id]);
+  // 解除画面などから戻ってきたときにも読み直す
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      load(id).then((d) => active && setData(d));
+      return () => {
+        active = false;
+      };
+    }, [id]),
+  );
 
   if (!data) {
     return (
@@ -69,16 +75,18 @@ export default function MemoryScreen() {
       </View>
     );
   }
-  return <MemoryDetail memory={data.memory} messages={data.messages} onChanged={reload} />;
+  return <MemoryDetail memory={data.memory} messages={data.messages} visits={data.visits} onChanged={reload} />;
 }
 
 function MemoryDetail({
   memory,
   messages,
+  visits,
   onChanged,
 }: {
   memory: MemorySummary;
   messages: MemoryMessage[];
+  visits: Visit[];
   onChanged: () => Promise<void>;
 }) {
   const { session } = useAuth();
@@ -87,6 +95,23 @@ function MemoryDetail({
   const isDraft = !memory.sealed_at;
   const original = messages.find((m) => m.is_original);
   const readable = messages.filter((m) => m.sealed_at && m.is_readable);
+  const myAddendumDraft = messages.find((m) => !m.is_original && !m.sealed_at && m.author_id === session?.user.id);
+  const visitPhotos = visits.filter((v) => v.photo_path);
+  const [creatingAddendum, setCreatingAddendum] = useState(false);
+
+  async function startAddendum() {
+    if (!session) return;
+    setError('');
+    setCreatingAddendum(true);
+    try {
+      await createAddendum(memory.id, session.user.id);
+      await onChanged();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setCreatingAddendum(false);
+    }
+  }
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
@@ -117,9 +142,15 @@ function MemoryDetail({
         <Photo path={memory.photo_path} style={{ width: width - spacing.md * 2, aspectRatio: 3 / 4, borderRadius: 12 }} />
 
         {isDraft && isOwner && original ? (
-          <DraftEditor messageId={original.id} initialBody={original.body ?? ''} onSealed={onChanged} />
+          <DraftEditor kind="original" messageId={original.id} initialBody={original.body ?? ''} onSealed={onChanged} />
         ) : (
-          <SealedCard memory={memory} />
+          <>
+            <SealedCard memory={memory} />
+            <Button
+              title="この場所で解除する"
+              onPress={() => router.push({ pathname: '/unlock/[id]', params: { id: memory.id } })}
+            />
+          </>
         )}
 
         {readable.length > 0 && (
@@ -136,6 +167,35 @@ function MemoryDetail({
           </View>
         )}
 
+        {!isDraft &&
+          (myAddendumDraft ? (
+            <DraftEditor
+              key={myAddendumDraft.id}
+              kind="addendum"
+              messageId={myAddendumDraft.id}
+              initialBody={myAddendumDraft.body ?? ''}
+              onSealed={onChanged}
+            />
+          ) : memory.my_unlock_count > 0 ? (
+            <Button title="追記を書く" variant="secondary" onPress={startAddendum} loading={creatingAddendum} />
+          ) : (
+            <Text style={styles.note}>現地で解除すると、追記を書けるようになります。</Text>
+          ))}
+
+        {visitPhotos.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>訪問写真</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+              {visitPhotos.map((v) => (
+                <View key={v.id} style={{ gap: 4 }}>
+                  <Photo path={v.photo_path!} style={styles.visitPhoto} />
+                  <Text style={styles.messageMeta}>{formatDate(v.unlocked_at)}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
         <ErrorText>{error}</ErrorText>
         {isOwner && (
           <View style={{ marginTop: spacing.lg }}>
@@ -149,10 +209,12 @@ function MemoryDetail({
 
 // 下書きを書き、封をする
 function DraftEditor({
+  kind,
   messageId,
   initialBody,
   onSealed,
 }: {
+  kind: 'original' | 'addendum';
   messageId: string;
   initialBody: string;
   onSealed: () => Promise<void>;
@@ -210,13 +272,15 @@ function DraftEditor({
     <View style={styles.section}>
       <View style={styles.statusRow}>
         <Ionicons name="create-outline" size={16} color={colors.textMuted} />
-        <Text style={styles.statusText}>下書き（あなただけが読めます。いつでも書き直せます）</Text>
+        <Text style={styles.statusText}>
+          {kind === 'original' ? '下書き' : '追記の下書き'}（あなただけが読めます。いつでも書き直せます）
+        </Text>
       </View>
       <TextInput
         value={body}
         onChangeText={setBody}
         onBlur={() => dirty && save()}
-        placeholder="その時、その場所で、何を思った？"
+        placeholder={kind === 'original' ? 'その時、その場所で、何を思った？' : 'もう一度ここに来て、何を思った？'}
         placeholderTextColor={colors.textMuted}
         multiline
         style={styles.editor}
@@ -286,6 +350,8 @@ const styles = StyleSheet.create({
   sealed: { borderColor: colors.primary },
   sealedTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
   sealedText: { fontSize: 14, color: colors.textMuted, lineHeight: 21 },
+  note: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
+  visitPhoto: { width: 96, height: 128, borderRadius: 8 },
   message: { gap: 4, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
   messageMeta: { fontSize: 12, color: colors.textMuted },
   messageBody: { fontSize: 16, color: colors.text, lineHeight: 24 },
