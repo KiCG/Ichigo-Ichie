@@ -47,4 +47,22 @@ set role anon;
 select as_user(null);
 select ok((select count(*) = 0 from storage.objects), 'ログインしていないと写真は見えない');
 reset role;
+
+-- ---------- visible_memories ----------
+set role authenticated;
+select as_user(:A);
+select ok((select count(*) = 1 from visible_memories()), 'A: 自分の思い出が1件');
+select ok((select sealed_at is not null and sealed_count = 3 and readable_count = 1 and my_unlock_count = 2
+           from visible_memories('11111111-0000-0000-0000-000000000000')),
+  'A: 封の状態・件数・読める数・解除回数が返る（Bの追記はロック中）');
+select as_user(:B);
+select ok((select count(*) = 1 and bool_and(sealed_count = 3 and readable_count = 2 and my_unlock_count = 1)
+           from visible_memories()), 'B: 共有された思い出が見え、件数が返る');
+select as_user(:C);
+select ok((select count(*) = 1 from visible_memories()), 'C: 自分の思い出だけ見える');
+select ok((select original_message_id is null and sealed_at is null from visible_memories()), 'C: メッセージのない思い出は下書き扱い');
+set role anon;
+select as_user(null);
+select throws($$select * from visible_memories()$$, 'ログインしていないと呼べない');
+reset role;
 \echo ALL TESTS PASSED

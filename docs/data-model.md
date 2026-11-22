@@ -7,7 +7,7 @@
 
 | プロジェクト | リージョン | 状態 |
 |---|---|---|
-| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage`・`v2_profile_display_name` 適用済み。Edge Function `unlock` デプロイ済み |
+| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage`・`v2_profile_display_name`・`v2_visible_memories` 適用済み。Edge Function `unlock` デプロイ済み |
 | `ichigo-ichie`（シドニー） | ap-southeast-2 | 一時停止中。不要なので削除してよい |
 
 ## テーブル（7つ）
@@ -53,6 +53,7 @@ profiles ─┬─< albums ──< album_members >── profiles
 | `memory_messages(memory_id)` | 思い出のメッセージ一覧（ロック判定つき） |
 | `accept_invite(token)` | 招待リンクでアルバムに参加する |
 | `my_photo_usage()` | 自分の写真の枚数と上限 |
+| `visible_memories(memory_id?)` | 見えている思い出の一覧（封の状態、封をしたメッセージの数、読める数、自分の解除回数つき） |
 
 これ以外の関数は、アクセスルールやトリガーの中だけで使い、アプリから直接は呼べない。ログインしていない人は、どの関数も呼べない。
 

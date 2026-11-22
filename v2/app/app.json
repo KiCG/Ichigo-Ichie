@@ -24,7 +24,23 @@
     "plugins": [
       "expo-router",
       "expo-status-bar",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-image",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "思い出の写真を撮ったり、その場所で撮り直して思い出を開いたりするためにカメラを使います。",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "写真を撮った場所を記録し、その場所に戻ったときに思い出を開くために位置情報を使います。"
+        }
+      ]
     ],
     "scheme": "ichigoichie",
     "experiments": {
