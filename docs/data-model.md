@@ -3,6 +3,13 @@
 > 設計方針は `docs/redesign.md`、SQL は `v2/supabase/schema.sql`。
 > ルールの検証は `bash v2/supabase/tests/run.sh`（ローカルの PostgreSQL 16 で実行）。
 
+## 適用先
+
+| プロジェクト | リージョン | 状態 |
+|---|---|---|
+| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | v2 スキーマ適用済み（マイグレーション `v2_initial_schema`） |
+| `ichigo-ichie`（シドニー） | ap-southeast-2 | 一時停止中。不要なので削除してよい |
+
 ## テーブル（7つ）
 
 ```
