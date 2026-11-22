@@ -1,5 +1,9 @@
 -- ローカル検証用: Supabase が用意する auth スキーマとロールの最小の代替
-create extension if not exists pgcrypto;
+-- Supabase と同じく、拡張機能は extensions スキーマに置き、検索パスに含める
+create schema extensions;
+create extension if not exists pgcrypto schema extensions;
+alter database postgres set search_path to "$user", public, extensions;
+set search_path to "$user", public, extensions;
 create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin bypassrls;

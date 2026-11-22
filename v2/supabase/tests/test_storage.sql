@@ -65,4 +65,4 @@ set role anon;
 select as_user(null);
 select throws($$select * from visible_memories()$$, 'ログインしていないと呼べない');
 reset role;
-\echo ALL TESTS PASSED
+

@@ -121,7 +121,7 @@ select throws($$select seal_message('33333333-0000-0000-0000-000000000000')$$, '
 
 -- ---------- 共有 ----------
 insert into albums (id, owner_id, name) values ('44444444-0000-0000-0000-000000000000', :A, '京都');
-insert into album_invites (album_id, token, created_by) values ('44444444-0000-0000-0000-000000000000', 'tok', :A);
+insert into album_invites (album_id, token, created_by) values ('44444444-0000-0000-0000-000000000000', 'TOK', :A);
 
 -- 下書きのままの思い出も同じアルバムに入れておく
 insert into memories (id, owner_id, album_id, photo_path, latitude, longitude, taken_at)
