@@ -36,6 +36,10 @@ npx expo install <package>   # パッケージの追加（SDK に合う版を選
 | `src/app/(app)/(tabs)/` | タブの画面（思い出一覧・マップ・その他） |
 | `src/app/(app)/capture.tsx` | 撮影（撮り直しできる） |
 | `src/app/(app)/memory/[id].tsx` | 思い出の詳細（下書き・封・読めるメッセージ・追記・訪問写真・削除） |
+| `src/app/(app)/album/` | アルバムの詳細・作成・名前変更・設定（メンバー、招待、削除・退出） |
+| `src/app/(app)/join.tsx` | 招待コードで参加 |
+| `src/app/(app)/move/[id].tsx` | 思い出を入れるアルバムを選ぶ |
+| `src/lib/albums.ts` | アルバム・メンバー・招待の読み書き |
 | `src/app/(app)/unlock/[id].tsx` | 解除カメラ（現地で撮影して解除する） |
 | `src/components/MemoryMap.tsx` | 地図（Web 版は `MemoryMap.web.tsx` の一覧で代用） |
 | `src/lib/unlock.ts` | 解除用の Edge Function の呼び出し |

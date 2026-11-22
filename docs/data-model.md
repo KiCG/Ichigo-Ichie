@@ -7,7 +7,7 @@
 
 | プロジェクト | リージョン | 状態 |
 |---|---|---|
-| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage`・`v2_profile_display_name`・`v2_visible_memories` 適用済み。Edge Function `unlock` デプロイ済み |
+| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage`・`v2_profile_display_name`・`v2_visible_memories`・`v2_albums_sharing`・`v2_albums_select_owner` 適用済み。Edge Function `unlock` デプロイ済み |
 | `ichigo-ichie`（シドニー） | ap-southeast-2 | 一時停止中。不要なので削除してよい |
 
 ## テーブル（7つ）
@@ -53,9 +53,18 @@ profiles ─┬─< albums ──< album_members >── profiles
 | `memory_messages(memory_id)` | 思い出のメッセージ一覧（ロック判定つき） |
 | `accept_invite(token)` | 招待リンクでアルバムに参加する |
 | `my_photo_usage()` | 自分の写真の枚数と上限 |
+| `my_albums()` | 自分のアルバムの一覧（役割、人数、見えている思い出の数、表紙） |
+| `remove_memory_from_album(memory_id)` | 思い出をアルバムから外す（思い出の持ち主か、アルバムの持ち主） |
 | `visible_memories(memory_id?)` | 見えている思い出の一覧（封の状態、封をしたメッセージの数、読める数、自分の解除回数つき） |
 
 これ以外の関数は、アクセスルールやトリガーの中だけで使い、アプリから直接は呼べない。ログインしていない人は、どの関数も呼べない。
+
+## 共有のルール
+
+- 招待コードは8文字（見間違えやすい 0/O/1/I/L は使わない）。大文字・小文字や前後の空白は気にしない
+- アルバムの持ち主は、他のメンバーの思い出をアルバムから外せる。外した思い出は、撮った人の「未整理」に戻る
+- メンバーが抜けた・外されたときは、その人の思い出もアルバムから外れる（その人の「未整理」に戻る）
+- アルバムを削除しても思い出は消えない（それぞれ撮った人の「未整理」に戻る）
 
 ## 写真の保存場所（Storage）
 
@@ -87,7 +96,6 @@ profiles ─┬─< albums ──< album_members >── profiles
 
 ## まだ決めていない・後で作るもの
 
-- **アルバムの持ち主が、他の人の思い出をアルバムから外せるか**：今は思い出の持ち主しか外せない
 - **写真の上限の値**：仮に30枚。プランが決まったら変える
 - **解除の試行回数の制限**：今は現地にいれば何度でも AI 判定を呼べる。Gemini の利用料が気になったら回数を制限する
 - **使われなくなった写真の掃除**：アップロードしたが思い出を登録しなかった写真が残りうる
