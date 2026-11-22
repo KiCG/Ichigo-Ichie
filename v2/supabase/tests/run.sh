@@ -11,7 +11,7 @@ RUN() { if [ "$(id -u)" = 0 ]; then su postgres -c "$*"; else bash -c "$*"; fi; 
 RUN "$BIN/initdb -D $D/data -A trust -U postgres >/dev/null"
 RUN "$BIN/pg_ctl -D $D/data -o '-p $PORT -k $D' -l $D/log -w start >/dev/null"
 trap 'RUN "$BIN/pg_ctl -D $D/data -m fast stop >/dev/null"; rm -rf "$D"' EXIT
-for f in tests/supabase_stub.sql schema.sql tests/test_rules.sql; do
+for f in tests/supabase_stub.sql migrations/*.sql tests/test_rules.sql tests/test_storage.sql; do
   psql -h "$D" -p "$PORT" -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f "$f" 2>&1 \
     | { grep -E "ok:|FAIL|ERROR|PASSED" || true; } | sed 's/^psql:[^ ]* NOTICE:  //'
 done

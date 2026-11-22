@@ -39,7 +39,7 @@ set role authenticated;
 -- ---------- 1人で使う ----------
 select as_user(:A);
 insert into memories (id, owner_id, photo_path, latitude, longitude, taken_at)
-values ('11111111-0000-0000-0000-000000000000', :A, 'm1/original.jpg', 35.0, 135.0, now());
+values ('11111111-0000-0000-0000-000000000000', :A, 'aaaaaaaa-0000-0000-0000-000000000000/11111111-0000-0000-0000-000000000000.jpg', 35.0, 135.0, now());
 insert into messages (id, memory_id, author_id, is_original, body)
 values ('22222222-0000-0000-0000-000000000000', '11111111-0000-0000-0000-000000000000', :A, true, '春の京都');
 select ok((select count(*) = 1 from messages), '下書きは自分で読める');
@@ -122,7 +122,7 @@ insert into album_invites (album_id, token, created_by) values ('44444444-0000-0
 
 -- 下書きのままの思い出も同じアルバムに入れておく
 insert into memories (id, owner_id, album_id, photo_path, latitude, longitude, taken_at)
-values ('55555555-0000-0000-0000-000000000000', :A, '44444444-0000-0000-0000-000000000000', 'm2/original.jpg', 35.0, 135.0, now());
+values ('55555555-0000-0000-0000-000000000000', :A, '44444444-0000-0000-0000-000000000000', 'aaaaaaaa-0000-0000-0000-000000000000/55555555-0000-0000-0000-000000000000.jpg', 35.0, 135.0, now());
 insert into messages (memory_id, author_id, is_original, body)
 values ('55555555-0000-0000-0000-000000000000', :A, true, 'まだ下書き');
 update memories set album_id = '44444444-0000-0000-0000-000000000000' where id = '11111111-0000-0000-0000-000000000000';
@@ -148,7 +148,7 @@ select ok((select count(*) = 1 from memories), '他人の思い出はアルバ�
 -- Bが今日解除し、訪問写真を保存
 reset role;
 insert into unlocks (memory_id, user_id, unlocked_at, photo_path)
-values ('11111111-0000-0000-0000-000000000000', :B, now(), 'm1/visits/b1.jpg');
+values ('11111111-0000-0000-0000-000000000000', :B, now(), 'bbbbbbbb-0000-0000-0000-000000000000/visits/b1.jpg');
 set role authenticated;
 select as_user(:B);
 select ok((select count(*) = 2 and bool_and(is_readable) from memory_messages('11111111-0000-0000-0000-000000000000')),
@@ -191,8 +191,11 @@ set role authenticated;
 select as_user(:C);
 select throws($$update profiles set photo_limit = 999 where id = 'cccccccc-0000-0000-0000-000000000000'$$,
   '上限は利用者が変えられない');
-insert into memories (owner_id, photo_path, latitude, longitude, taken_at) values (:C, 'c1.jpg', 0, 0, now());
-select throws($$insert into memories (owner_id, photo_path, latitude, longitude, taken_at) values ('cccccccc-0000-0000-0000-000000000000', 'c2.jpg', 0, 0, now())$$,
+select throws($$insert into memories (id, owner_id, photo_path, latitude, longitude, taken_at) values ('c0000001-0000-0000-0000-000000000000', 'cccccccc-0000-0000-0000-000000000000', 'aaaaaaaa-0000-0000-0000-000000000000/11111111-0000-0000-0000-000000000000.jpg', 0, 0, now())$$,
+  '他人の写真のパスは登録できない');
+insert into memories (id, owner_id, photo_path, latitude, longitude, taken_at)
+values ('c0000001-0000-0000-0000-000000000000', :C, 'cccccccc-0000-0000-0000-000000000000/c0000001-0000-0000-0000-000000000000.jpg', 0, 0, now());
+select throws($$insert into memories (id, owner_id, photo_path, latitude, longitude, taken_at) values ('c0000002-0000-0000-0000-000000000000', 'cccccccc-0000-0000-0000-000000000000', 'cccccccc-0000-0000-0000-000000000000/c0000002-0000-0000-0000-000000000000.jpg', 0, 0, now())$$,
   '上限を超えると追加できない');
 
 select ok((select used = 1 and photo_limit = 1 from my_photo_usage()), '自分の枚数と上限は確認できる');
@@ -207,4 +210,3 @@ select throws($$select memory_messages('11111111-0000-0000-0000-000000000000')$$
 select throws($$select accept_invite('tok')$$, 'ログインしていないと招待を受けられない');
 
 reset role;
-\echo ALL TESTS PASSED

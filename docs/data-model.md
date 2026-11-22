@@ -1,13 +1,13 @@
 # 一期一会 v2 — データの形
 
-> 設計方針は `docs/redesign.md`、SQL は `v2/supabase/schema.sql`。
-> ルールの検証は `bash v2/supabase/tests/run.sh`（ローカルの PostgreSQL 16 で実行）。
+> 設計方針は `docs/redesign.md`、SQL は `v2/supabase/migrations/`、解除用の関数は `v2/supabase/functions/unlock/`。
+> ルールの検証は `bash v2/supabase/tests/run.sh`（ローカルの PostgreSQL 16）、関数の検証は `v2/supabase/functions/unlock` で `deno test`。
 
 ## 適用先
 
 | プロジェクト | リージョン | 状態 |
 |---|---|---|
-| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | v2 スキーマ適用済み（マイグレーション `v2_initial_schema`） |
+| `ichigo-ichie-tokyo`（`maidwopkuftlcaxwybbq`） | 東京（ap-northeast-1） | マイグレーション `v2_initial_schema`・`v2_storage` 適用済み。Edge Function `unlock` デプロイ済み |
 | `ichigo-ichie`（シドニー） | ap-southeast-2 | 一時停止中。不要なので削除してよい |
 
 ## テーブル（7つ）
@@ -56,9 +56,37 @@ profiles ─┬─< albums ──< album_members >── profiles
 
 これ以外の関数は、アクセスルールやトリガーの中だけで使い、アプリから直接は呼べない。ログインしていない人は、どの関数も呼べない。
 
+## 写真の保存場所（Storage）
+
+非公開のバケット `photos` に置く（旧設計は公開バケットだった）。
+
+| 写真 | パス | 保存する人 |
+|---|---|---|
+| 元の写真 | `{持ち主のID}/{思い出のID}.jpg` | アプリ |
+| 訪問写真 | `{撮った人のID}/visits/{解除記録のID}.jpg` | 解除用の Edge Function のみ |
+
+- 見られるのは、自分のフォルダの写真と、見えている思い出の写真・訪問写真
+- 思い出を登録するときは、自分のフォルダの `{思い出のID}.jpg` しか指定できない（他人の写真を自分の思い出として登録して覗くことを防ぐ）
+- 消せるのは、どの思い出・訪問からも使われていない自分の写真だけ
+
+アプリ側の手順：思い出の ID をアプリで作る → 写真をアップロード → 思い出を登録する。
+
+## 解除用の Edge Function（`unlock`）
+
+アプリから `multipart/form-data` で、思い出の ID、現在地、GPS の誤差、今撮った写真、訪問写真を保存するかを送る。
+
+1. 利用者を確認する
+2. その思い出がその人に見えるかを、利用者の権限で確認する
+3. 撮影地点から 100m 以内か確認する（GPS の誤差は 50m まで差し引く）。遠ければ AI 判定はしない
+4. Gemini で元の写真と今の写真を比べる
+5. 一致したら `unlocks` に記録する
+6. 希望があれば訪問写真を保存する。上限を超えていたら保存せず、解除だけ有効にする
+
+必要な設定：Edge Function のシークレット `GEMINI_API_KEY`（モデルは `GEMINI_MODEL` で変更可、既定は `gemini-2.5-flash`）。
+
 ## まだ決めていない・後で作るもの
 
-- **Storage**：写真は非公開のバケットに置き、`can_view_memory()` と同じ条件で読めるようにする（旧設計は公開バケットだった）
-- **解除用の Edge Function**：位置の確認、AI 判定、`unlocks` への記録、訪問写真の保存（次の段階）
 - **アルバムの持ち主が、他の人の思い出をアルバムから外せるか**：今は思い出の持ち主しか外せない
 - **写真の上限の値**：仮に30枚。プランが決まったら変える
+- **解除の試行回数の制限**：今は現地にいれば何度でも AI 判定を呼べる。Gemini の利用料が気になったら回数を制限する
+- **使われなくなった写真の掃除**：アップロードしたが思い出を登録しなかった写真が残りうる
